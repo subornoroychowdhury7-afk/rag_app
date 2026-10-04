@@ -1,0 +1,7 @@
+  fastapi
+  uvicorn
+  chromadb
+  google-generativeai
+  python-multipart
+  pypdf2
+  python-dotenv
