@@ -19,9 +19,9 @@ A full-stack Retrieval-Augmented Generation (RAG) platform built with Python and
 
 - **Frontend:** Next.js / React, TypeScript, Tailwind CSS
 - **Backend:** Python (FastAPI / Flask / LangChain / LlamaIndex)
-- **Vector Database:** [e.g., ChromaDB / Pinecone / Qdrant]
-- **LLM / Embeddings:** [e.g., OpenAI GPT-4 / HuggingFace / Cohere]
-- **Deployment:** Vercel (Frontend), [e.g., Render / Fly.io] (Backend)
+- **Vector Database:**  ChromaDB / Pinecone / Qdrant
+- **LLM / Embeddings:** OpenAI GPT-4 / HuggingFace / Cohere
+- **Deployment:** Vercel (Frontend), Render (Backend)
 
 ---
 
