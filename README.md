@@ -8,7 +8,7 @@ A full-stack Retrieval-Augmented Generation (RAG) platform built with Python and
 
 ## ✨ Features
 
-- **Document Ingestion:** Support for PDF, TXT, and Markdown indexing.
+- **Document Ingestion:** Support for PDF files only.
 - **Contextual Search:** Vector similarity search using semantic embeddings.
 - **Grounded Responses:** AI responses powered by LLM orchestration with context citations.
 - **Modern UI:** Clean, responsive chat interface built with Next.js/TypeScript.
