@@ -136,7 +136,10 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
     setMessages((m) => [...m, { role: "user", content: query, timestamp: new Date() }]);
     setLoading(true);
     try {
-      const res = await sendChat(query);
+      const history = messages
+        .filter((m) => !m.isError)
+        .map((m) => ({ role: m.role, content: m.content }));
+      const res = await sendChat(query, history);
       setMessages((m) => [
         ...m,
         { role: "assistant", content: res.answer, sources: res.sources, timestamp: new Date() },

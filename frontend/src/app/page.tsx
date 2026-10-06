@@ -4,11 +4,16 @@ import { useEffect, useState } from "react";
 import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import Sidebar, { type Doc } from "@/components/Sidebar";
+import { getDocuments } from "@/lib/api";
 
 export default function Home() {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+
+  useEffect(() => {
+    getDocuments().then(setDocs).catch(console.error);
+  }, []);
 
   /* ---- Dark mode: localStorage + system preference on mount ---- */
   useEffect(() => {

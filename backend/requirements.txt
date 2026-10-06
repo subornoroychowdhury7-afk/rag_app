@@ -3,5 +3,5 @@
   chromadb
   google-generativeai
   python-multipart
-  pypdf2
+  pypdf
   python-dotenv

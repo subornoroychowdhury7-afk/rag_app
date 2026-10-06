@@ -17,8 +17,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core import exceptions as gexc
 from pydantic import BaseModel
-from PyPDF2 import PdfReader
-from PyPDF2.errors import PdfReadError
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -103,8 +103,14 @@ app.add_middleware(
 )
 
 
+class Message(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     query: str
+    history: list[Message] = []
 
 
 # --------------------------------------------------------------------------- #
@@ -211,7 +217,7 @@ def health():
 
 @app.post("/upload")
 def upload(file: UploadFile = File(...)):
-    # Plain `def`: PyPDF2 and the Gemini SDK are blocking, so FastAPI runs this in
+    # Plain `def`: pypdf and the Gemini SDK are blocking, so FastAPI runs this in
     # its threadpool instead of stalling the event loop.
     require_api_key()
 
@@ -267,6 +273,18 @@ def upload(file: UploadFile = File(...)):
     return {"message": "Upload successful", "filename": filename, "chunks_processed": len(chunks)}
 
 
+@app.get("/documents")
+def get_documents():
+    """List all documents and their chunk counts."""
+    results = collection.get(include=["metadatas"])
+    metadatas = results["metadatas"] or []
+    docs = {}
+    for meta in metadatas:
+        source = meta.get("source", "unknown")
+        docs[source] = docs.get(source, 0) + 1
+    return [{"name": name, "chunks": count} for name, count in docs.items()]
+
+
 @app.delete("/documents/{filename:path}")
 def delete_document(filename: str):
     """Remove all chunks associated with `filename` from the vector store."""
@@ -320,8 +338,15 @@ def chat(request: ChatRequest):
     prompt = PROMPT_TEMPLATE.format(context_string=context_string, query=query)
 
     # 4. Generate
+    gemini_history = []
+    for msg in request.history:
+        # map "assistant" to "model" for Gemini
+        role = "model" if msg.role == "assistant" else "user"
+        gemini_history.append({"role": role, "parts": [msg.content]})
+
     try:
-        response = call_gemini(generation_model.generate_content, prompt)
+        chat_session = generation_model.start_chat(history=gemini_history)
+        response = call_gemini(chat_session.send_message, prompt)
         answer = response.text  # raises ValueError if the response was blocked/empty
     except ValueError as exc:
         logger.warning("Response blocked or empty: %s", exc)

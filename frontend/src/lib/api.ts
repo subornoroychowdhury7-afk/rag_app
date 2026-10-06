@@ -43,16 +43,27 @@ export function uploadPdf(file: File) {
   return request<UploadResult>("/upload", { method: "POST", body: form });
 }
 
-export function sendChat(query: string) {
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export function sendChat(query: string, history: ChatMessage[] = []) {
   return request<ChatResult>("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, history }),
   });
 }
 
 export function deleteDocument(filename: string) {
   return request<DeleteResult>(`/documents/${encodeURIComponent(filename)}`, {
     method: "DELETE",
+  });
+}
+
+export function getDocuments() {
+  return request<{ name: string; chunks: number }[]>("/documents", {
+    method: "GET",
   });
 }
