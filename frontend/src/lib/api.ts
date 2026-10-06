@@ -11,6 +11,12 @@ export interface ChatResult {
   sources: string[];
 }
 
+export interface DeleteResult {
+  message: string;
+  filename: string;
+  chunks_deleted: number;
+}
+
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -42,5 +48,11 @@ export function sendChat(query: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
+  });
+}
+
+export function deleteDocument(filename: string) {
+  return request<DeleteResult>(`/documents/${encodeURIComponent(filename)}`, {
+    method: "DELETE",
   });
 }

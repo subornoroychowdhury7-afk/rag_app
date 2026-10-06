@@ -267,6 +267,17 @@ def upload(file: UploadFile = File(...)):
     return {"message": "Upload successful", "filename": filename, "chunks_processed": len(chunks)}
 
 
+@app.delete("/documents/{filename:path}")
+def delete_document(filename: str):
+    """Remove all chunks associated with `filename` from the vector store."""
+    results = collection.get(where={"source": filename}, include=[])
+    if not results["ids"]:
+        raise HTTPException(404, f"No document found with name '{filename}'.")
+    collection.delete(ids=results["ids"])
+    logger.info("Deleted %d chunks for %s", len(results["ids"]), filename)
+    return {"message": "Document deleted", "filename": filename, "chunks_deleted": len(results["ids"])}
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     query = request.query.strip()
