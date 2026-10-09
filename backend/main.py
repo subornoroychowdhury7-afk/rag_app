@@ -5,24 +5,33 @@ POST /chat   : question -> embedding -> top-K similar chunks -> Gemini answer
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
+import math
 import os
+import re
+import secrets
+import sqlite3
 import time
 import urllib.error
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Literal
 
 import chromadb
 import fitz
 import google.generativeai as genai
 import pytesseract
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core import exceptions as gexc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -60,6 +69,62 @@ MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "0.65"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
 MAX_QUERY_CHARS = 2000
 MAX_RETRIES = 4  # attempts per Gemini call on rate-limit / transient errors
+AUTH_DB_PATH = Path(os.getenv("AUTH_DB_PATH", "./auth.sqlite3"))
+AUTH_SECRET = os.getenv("AUTH_SECRET", "")
+TOKEN_TTL_SECONDS = 12 * 60 * 60
+CHAT_LIMIT_PER_HOUR = int(os.getenv("CHAT_LIMIT_PER_HOUR", "30"))
+UPLOAD_LIMIT_PER_DAY = int(os.getenv("UPLOAD_LIMIT_PER_DAY", "10"))
+AUTH_LIMIT_PER_15_MINUTES = int(os.getenv("AUTH_LIMIT_PER_15_MINUTES", "100"))
+LOGIN_EMAIL_LIMIT_PER_15_MINUTES = int(os.getenv("LOGIN_EMAIL_LIMIT_PER_15_MINUTES", "10"))
+
+if not AUTH_SECRET:
+    logger.error("AUTH_SECRET is not set - authentication endpoints will be unavailable.")
+
+
+def open_auth_db() -> sqlite3.Connection:
+    AUTH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(AUTH_DB_PATH, timeout=15)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+@contextmanager
+def auth_db():
+    connection = open_auth_db()
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def initialize_auth_db() -> None:
+    with auth_db() as connection:
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )"""
+        )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+                subject TEXT NOT NULL,
+                action TEXT NOT NULL,
+                tokens REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (subject, action)
+            )"""
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS rate_limit_buckets_updated_at "
+            "ON rate_limit_buckets (updated_at)"
+        )
+
+
+initialize_auth_db()
 
 NO_ANSWER = "I cannot answer this based on the uploaded documents."
 
@@ -103,18 +168,134 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
+class Credentials(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=12, max_length=128)
+
+
 class Message(BaseModel):
-    role: str
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4_000)
 
 
 class ChatRequest(BaseModel):
     query: str
-    history: list[Message] = []
+    history: list[Message] = Field(default_factory=list, max_length=20)
+
+
+def ensure_auth_configured() -> None:
+    if len(AUTH_SECRET) < 32:
+        raise HTTPException(
+            503,
+            "Authentication is unavailable: configure a random AUTH_SECRET of at least 32 characters.",
+        )
+
+
+def normalize_email(email: str) -> str:
+    normalized = email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+        raise HTTPException(422, "Enter a valid email address.")
+    return normalized
+
+
+def hash_password(password: str, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 600_000)
+
+
+def encode_token(user_id: str) -> str:
+    ensure_auth_configured()
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=")
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"sub": user_id, "exp": int(time.time()) + TOKEN_TTL_SECONDS}, separators=(",", ":")).encode()
+    ).rstrip(b"=")
+    signing_input = header + b"." + payload
+    signature = hmac.new(AUTH_SECRET.encode(), signing_input, hashlib.sha256).digest()
+    return (signing_input + b"." + base64.urlsafe_b64encode(signature).rstrip(b"=")).decode("ascii")
+
+
+def decode_token(token: str) -> str:
+    ensure_auth_configured()
+    try:
+        encoded_header, encoded_payload, encoded_signature = token.split(".")
+        signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
+        signature = base64.urlsafe_b64decode(encoded_signature + "=" * (-len(encoded_signature) % 4))
+        expected_signature = hmac.new(AUTH_SECRET.encode(), signing_input, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("Invalid signature")
+        header = json.loads(base64.urlsafe_b64decode(encoded_header + "=" * (-len(encoded_header) % 4)))
+        payload = json.loads(base64.urlsafe_b64decode(encoded_payload + "=" * (-len(encoded_payload) % 4)))
+        user_id = payload["sub"]
+        if header.get("alg") != "HS256" or not isinstance(user_id, str) or payload["exp"] <= time.time():
+            raise ValueError("Invalid or expired token")
+        return user_id
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            401,
+            "Invalid or expired access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+def get_current_user(authorization: str | None = Header(default=None)) -> dict[str, str]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Authentication required.", headers={"WWW-Authenticate": "Bearer"})
+    user_id = decode_token(authorization[7:].strip())
+    with auth_db() as connection:
+        user = connection.execute("SELECT id, email FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user is None:
+        raise HTTPException(401, "Invalid or expired access token.", headers={"WWW-Authenticate": "Bearer"})
+    return {"id": user["id"], "email": user["email"]}
+
+
+def enforce_rate_limit(subject: str, action: str, limit: int, window_seconds: int) -> None:
+    now = time.time()
+    if limit < 1 or window_seconds < 1:
+        raise HTTPException(503, "Rate limits are misconfigured on the server.")
+    with auth_db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM rate_limit_buckets WHERE updated_at < ?", (now - 86_400,))
+        bucket = connection.execute(
+            "SELECT tokens, updated_at FROM rate_limit_buckets WHERE subject = ? AND action = ?",
+            (subject, action),
+        ).fetchone()
+        tokens = float(limit) if bucket is None else min(
+            float(limit),
+            bucket["tokens"] + max(0.0, now - bucket["updated_at"]) * limit / window_seconds,
+        )
+        allowed = tokens >= 1.0
+        remaining = tokens - 1.0 if allowed else tokens
+        connection.execute(
+            """INSERT INTO rate_limit_buckets (subject, action, tokens, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (subject, action)
+               DO UPDATE SET tokens = excluded.tokens, updated_at = excluded.updated_at""",
+            (subject, action, remaining, now),
+        )
+        connection.commit()
+        if allowed:
+            return
+
+    retry_after = math.ceil((1.0 - tokens) * window_seconds / limit)
+    logger.warning(
+        "Rate limit exceeded: action=%s subject=%s limit=%d retry_after=%d",
+        action,
+        subject,
+        limit,
+        retry_after,
+    )
+    raise HTTPException(
+        429,
+        "Too many requests. Please wait before trying again.",
+        headers={"Retry-After": str(max(1, retry_after))},
+    )
+
+
+def hash_rate_limit_subject(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -330,10 +511,69 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/auth/register")
+def register(credentials: Credentials, request: Request):
+    ensure_auth_configured()
+    client_ip = request.client.host if request.client else "unknown"
+    enforce_rate_limit(hash_rate_limit_subject(client_ip), "register", AUTH_LIMIT_PER_15_MINUTES, 900)
+    email = normalize_email(credentials.email)
+    salt = secrets.token_bytes(16)
+    user_id = str(uuid.uuid4())
+    password_hash = hash_password(credentials.password, salt)
+    try:
+        with auth_db() as connection:
+            connection.execute(
+                "INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, email, password_hash.hex(), salt.hex(), time.time()),
+            )
+    except sqlite3.IntegrityError as exc:
+        logger.info("Registration rejected: email already registered")
+        raise HTTPException(409, "An account with this email already exists.") from exc
+    logger.info("Account created: user_id=%s", user_id)
+    return {
+        "access_token": encode_token(user_id),
+        "token_type": "bearer",
+        "expires_in": TOKEN_TTL_SECONDS,
+        "user": {"email": email},
+    }
+
+
+@app.post("/auth/login")
+def login(credentials: Credentials, request: Request):
+    ensure_auth_configured()
+    client_ip = request.client.host if request.client else "unknown"
+    enforce_rate_limit(hash_rate_limit_subject(client_ip), "login", AUTH_LIMIT_PER_15_MINUTES, 900)
+    email = normalize_email(credentials.email)
+    enforce_rate_limit(
+        hash_rate_limit_subject(email),
+        "login_account",
+        LOGIN_EMAIL_LIMIT_PER_15_MINUTES,
+        900,
+    )
+    with auth_db() as connection:
+        user = connection.execute(
+            "SELECT id, password_hash, password_salt FROM users WHERE email = ?", (email,)
+        ).fetchone()
+    if user is None or not hmac.compare_digest(
+        hash_password(credentials.password, bytes.fromhex(user["password_salt"])).hex(),
+        user["password_hash"],
+    ):
+        logger.warning("Login failed: invalid credentials")
+        raise HTTPException(401, "Email or password is incorrect.")
+    logger.info("Account authenticated: user_id=%s", user["id"])
+    return {
+        "access_token": encode_token(user["id"]),
+        "token_type": "bearer",
+        "expires_in": TOKEN_TTL_SECONDS,
+        "user": {"email": email},
+    }
+
+
 @app.post("/upload")
-def upload(file: UploadFile = File(...)):
+def upload(file: UploadFile = File(...), user: dict[str, str] = Depends(get_current_user)):
     # Plain `def`: pypdf and the Gemini SDK are blocking, so FastAPI runs this in
     # its threadpool instead of stalling the event loop.
+    enforce_rate_limit(user["id"], "upload", UPLOAD_LIMIT_PER_DAY, 86_400)
     require_api_key()
 
     # 1. Validate
@@ -368,7 +608,8 @@ def upload(file: UploadFile = File(...)):
     embedded_at = time.perf_counter()
 
     # 5. Re-uploading a file replaces its earlier chunks instead of duplicating them
-    previous = collection.get(where={"source": filename}, include=[])["ids"]
+    owner_filter = {"$and": [{"owner_id": user["id"]}, {"source": filename}]}
+    previous = collection.get(where=owner_filter, include=[])["ids"]
     if previous:
         collection.delete(ids=previous)
 
@@ -376,22 +617,25 @@ def upload(file: UploadFile = File(...)):
         ids=[str(uuid.uuid4()) for _ in chunks],
         embeddings=embeddings,
         documents=chunks,
-        metadatas=[{"source": filename, "chunk_index": i} for i in range(len(chunks))],
+        metadatas=[
+            {"owner_id": user["id"], "source": filename, "chunk_index": i}
+            for i in range(len(chunks))
+        ],
     )
 
     completed_at = time.perf_counter()
     logger.info(
-        "Ingested %s: %d chunks (replaced %d); extraction %.2fs, embedding %.2fs, storage %.2fs, total %.2fs",
-        filename, len(chunks), len(previous), extracted_at - started_at,
+        "Ingested source=%s user_id=%s chunks=%d replaced=%d; extraction %.2fs, embedding %.2fs, storage %.2fs, total %.2fs",
+        filename, user["id"], len(chunks), len(previous), extracted_at - started_at,
         embedded_at - extracted_at, completed_at - embedded_at, completed_at - started_at,
     )
     return {"message": "Upload successful", "filename": filename, "chunks_processed": len(chunks)}
 
 
 @app.get("/documents")
-def get_documents():
-    """List all documents and their chunk counts."""
-    results = collection.get(include=["metadatas"])
+def get_documents(user: dict[str, str] = Depends(get_current_user)):
+    """List the authenticated user's documents and their chunk counts."""
+    results = collection.get(where={"owner_id": user["id"]}, include=["metadatas"])
     metadatas = results["metadatas"] or []
     docs = {}
     for meta in metadatas:
@@ -401,28 +645,35 @@ def get_documents():
 
 
 @app.delete("/documents/{filename:path}")
-def delete_document(filename: str):
-    """Remove all chunks associated with `filename` from the vector store."""
-    results = collection.get(where={"source": filename}, include=[])
+def delete_document(filename: str, user: dict[str, str] = Depends(get_current_user)):
+    """Remove the authenticated user's chunks associated with `filename`."""
+    results = collection.get(
+        where={"$and": [{"owner_id": user["id"]}, {"source": filename}]},
+        include=[],
+    )
     if not results["ids"]:
         raise HTTPException(404, f"No document found with name '{filename}'.")
     collection.delete(ids=results["ids"])
-    logger.info("Deleted %d chunks for %s", len(results["ids"]), filename)
+    logger.info("Deleted %d chunks for user_id=%s source=%s",
+                len(results["ids"]), user["id"], filename)
     return {"message": "Document deleted", "filename": filename, "chunks_deleted": len(results["ids"])}
 
 
 @app.post("/chat")
-def chat(request: ChatRequest):
-    query = request.query.strip()
+def chat(chat_request: ChatRequest, user: dict[str, str] = Depends(get_current_user)):
+    enforce_rate_limit(user["id"], "chat", CHAT_LIMIT_PER_HOUR, 3_600)
+    query = chat_request.query.strip()
     if not query:
         raise HTTPException(400, "Query must not be empty.")
     if len(query) > MAX_QUERY_CHARS:
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
+    logger.info("Chat request: user_id=%s query_chars=%d", user["id"], len(query))
 
     # Nothing ingested yet -> no context, so don't spend an API call.
-    total = collection.count()
-    if total == 0:
+    owner_filter = {"owner_id": user["id"]}
+    owned_chunks = collection.get(where=owner_filter, limit=1, include=[])["ids"]
+    if not owned_chunks:
         return {"answer": NO_ANSWER, "sources": []}
 
     # 1. Embed the query (same model + dimension as the stored chunks)
@@ -435,8 +686,9 @@ def chat(request: ChatRequest):
     # 2. Vector search, then keep only chunks that are actually relevant
     results = collection.query(
         query_embeddings=[query_vector],
-        n_results=min(TOP_K, total),
+        n_results=TOP_K,
         include=["documents", "distances"],
+        where=owner_filter,
     )
     distances: list[float] = results["distances"][0]
     logger.info("Retrieval distances (cutoff %.2f): %s", MAX_DISTANCE, [round(d, 3) for d in distances])
@@ -454,7 +706,7 @@ def chat(request: ChatRequest):
 
     # 4. Generate
     gemini_history = []
-    for msg in request.history:
+    for msg in chat_request.history:
         # map "assistant" to "model" for Gemini
         role = "model" if msg.role == "assistant" else "user"
         gemini_history.append({"role": role, "parts": [msg.content]})
