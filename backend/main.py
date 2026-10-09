@@ -5,11 +5,15 @@ POST /chat   : question -> embedding -> top-K similar chunks -> Gemini answer
 """
 
 import hashlib
+import base64
+import json
 import logging
 import os
 import re
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from io import BytesIO
 
@@ -227,6 +231,56 @@ def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list
     return embeddings
 
 
+def ocr_pdf_with_gemini(contents: bytes) -> str:
+    """Transcribe a scanned PDF through Gemini when local Tesseract is unavailable."""
+    require_api_key()
+    model = GENERATION_MODEL.removeprefix("models/")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": "Transcribe all visible text in this PDF as faithfully as possible. "
+                         "Preserve page order and paragraph breaks. Return only the transcription; "
+                         "do not summarize or add commentary."},
+                {"inlineData": {
+                    "mimeType": "application/pdf",
+                    "data": base64.b64encode(contents).decode("ascii"),
+                }},
+            ],
+        }],
+        "generationConfig": {"temperature": 0},
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        logger.exception("Gemini OCR request failed with HTTP %d", exc.code)
+        if exc.code == 429:
+            raise HTTPException(429, "The Gemini API rate limit or quota was reached during OCR. Please wait and try again.") from exc
+        if exc.code in (401, 403):
+            raise HTTPException(500, "The Gemini API key is missing, invalid, or not permitted for OCR.") from exc
+        raise HTTPException(503, "Gemini OCR is temporarily unavailable. Please try again shortly.") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        logger.exception("Gemini OCR request failed")
+        raise HTTPException(503, "Gemini OCR could not be reached. Please try again shortly.") from exc
+
+    text = "\n".join(
+        part["text"]
+        for candidate in result.get("candidates", [])
+        for part in candidate.get("content", {}).get("parts", [])
+        if isinstance(part.get("text"), str)
+    ).strip()
+    if not text:
+        raise HTTPException(422, "No text could be recognized in this PDF.")
+    return text
+
+
 def extract_pdf_text(contents: bytes) -> str:
     """Extract embedded text and OCR only pages that contain no selectable text."""
     text_pages: list[str] = []
@@ -249,9 +303,10 @@ def extract_pdf_text(contents: bytes) -> str:
         document.close()
     except (fitz.FileDataError, fitz.EmptyFileError) as exc:
         raise HTTPException(400, f"Could not read PDF: {exc}") from exc
-    except pytesseract.TesseractNotFoundError as exc:
-        logger.exception("Tesseract OCR engine is not installed")
-        raise HTTPException(503, "OCR is not available on this server. Install the Tesseract OCR engine.") from exc
+    except pytesseract.TesseractNotFoundError:
+        document.close()
+        logger.warning("Tesseract is unavailable; falling back to Gemini PDF transcription")
+        return ocr_pdf_with_gemini(contents)
     except Exception as exc:
         logger.exception("PDF text extraction or OCR failed")
         raise HTTPException(422, f"Could not extract text from PDF: {exc}") from exc
