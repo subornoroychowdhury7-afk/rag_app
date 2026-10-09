@@ -4,18 +4,15 @@ POST /upload : PDF -> text -> overlapping chunks -> Gemini embeddings -> ChromaD
 POST /chat   : question -> embedding -> top-K similar chunks -> Gemini answer
 """
 
-import hashlib
 import base64
 import json
 import logging
 import os
-import re
-import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
-from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
 
 import chromadb
 import fitz
@@ -26,8 +23,6 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core import exceptions as gexc
 from pydantic import BaseModel
-from pypdf import PdfReader
-from pypdf.errors import PdfReadError
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -53,8 +48,8 @@ EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
 GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-2.5-flash")
 generation_model = genai.GenerativeModel(GENERATION_MODEL)
 
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1800"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "180"))
 TOP_K = 5
 
 # Cosine DISTANCE cutoff (0 = identical, ~1 = unrelated). Chunks further away than
@@ -217,18 +212,28 @@ def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
 
 
 def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list[list[float]]:
-    """Embed many chunks through Gemini's batch endpoint (up to 100 per request)."""
-    result = call_gemini(
-        genai.embed_content,
-        model=EMBEDDING_MODEL,
-        content=texts,
-        task_type=task_type,
-        output_dimensionality=EMBEDDING_DIM,
-    )
-    embeddings = result["embedding"]
-    if len(embeddings) != len(texts):
-        raise ValueError(f"Gemini returned {len(embeddings)} embeddings for {len(texts)} chunks.")
-    return embeddings
+    """Embed in bounded batches, running two batches in parallel for large PDFs."""
+    batches = [texts[i:i + 100] for i in range(0, len(texts), 100)]
+
+    def embed_batch(batch: list[str]) -> list[list[float]]:
+        result = call_gemini(
+            genai.embed_content,
+            model=EMBEDDING_MODEL,
+            content=batch,
+            task_type=task_type,
+            output_dimensionality=EMBEDDING_DIM,
+        )
+        embeddings = result["embedding"]
+        if len(embeddings) != len(batch):
+            raise ValueError(f"Gemini returned {len(embeddings)} embeddings for {len(batch)} chunks.")
+        return embeddings
+
+    if len(batches) == 1:
+        return embed_batch(batches[0])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        return [embedding for batch_result in executor.map(embed_batch, batches)
+                for embedding in batch_result]
 
 
 def ocr_pdf_with_gemini(contents: bytes) -> str:
@@ -286,6 +291,8 @@ def extract_pdf_text(contents: bytes) -> str:
     text_pages: list[str] = []
     try:
         document = fitz.open(stream=contents, filetype="pdf")
+        if document.needs_pass:
+            raise HTTPException(400, "Encrypted PDFs are not supported.")
         for page_number, page in enumerate(document, start=1):
             page_text = page.get_text("text").strip()
             if page_text:
@@ -301,6 +308,8 @@ def extract_pdf_text(contents: bytes) -> str:
             text_pages.append(page_text)
             logger.info("OCR page %d/%d: %d characters", page_number, len(document), len(page_text))
         document.close()
+    except HTTPException:
+        raise
     except (fitz.FileDataError, fitz.EmptyFileError) as exc:
         raise HTTPException(400, f"Could not read PDF: {exc}") from exc
     except pytesseract.TesseractNotFoundError:
@@ -340,15 +349,9 @@ def upload(file: UploadFile = File(...)):
         raise HTTPException(400, "The uploaded file is empty.")
 
     # 2. Extract selectable text and OCR scanned pages (in memory - no PDF is saved).
-    try:
-        reader = PdfReader(BytesIO(contents))
-        if reader.is_encrypted:
-            raise HTTPException(400, "Encrypted PDFs are not supported.")
-    except HTTPException:
-        raise
-    except (PdfReadError, ValueError, OSError, KeyError) as exc:
-        raise HTTPException(400, f"Could not read PDF: {exc}") from exc
+    started_at = time.perf_counter()
     text = extract_pdf_text(contents)
+    extracted_at = time.perf_counter()
 
     # 3. Chunk
     chunks = chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
@@ -362,6 +365,7 @@ def upload(file: UploadFile = File(...)):
     except Exception as exc:
         logger.exception("Embedding failed for %s", filename)
         raise to_http_error(exc, "Embedding") from exc
+    embedded_at = time.perf_counter()
 
     # 5. Re-uploading a file replaces its earlier chunks instead of duplicating them
     previous = collection.get(where={"source": filename}, include=[])["ids"]
@@ -375,7 +379,12 @@ def upload(file: UploadFile = File(...)):
         metadatas=[{"source": filename, "chunk_index": i} for i in range(len(chunks))],
     )
 
-    logger.info("Ingested %s: %d chunks (replaced %d)", filename, len(chunks), len(previous))
+    completed_at = time.perf_counter()
+    logger.info(
+        "Ingested %s: %d chunks (replaced %d); extraction %.2fs, embedding %.2fs, storage %.2fs, total %.2fs",
+        filename, len(chunks), len(previous), extracted_at - started_at,
+        embedded_at - extracted_at, completed_at - embedded_at, completed_at - started_at,
+    )
     return {"message": "Upload successful", "filename": filename, "chunks_processed": len(chunks)}
 
 
