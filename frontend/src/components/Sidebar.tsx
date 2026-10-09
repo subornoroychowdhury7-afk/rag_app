@@ -141,7 +141,7 @@ export default function Sidebar({ isOpen, onClose, docs, onUploaded, onDeleted }
             {busy ? "Processing…" : "Drop a PDF or click to browse"}
           </span>
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-            Text-based PDFs up to 20 MB
+            PDFs up to 20 MB, including scanned pages
           </p>
         </div>
       </label>

@@ -1,5 +1,5 @@
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "https://docqa-api.onrender.com";
+  process.env.NEXT_PUBLIC_API_URL ?? "https://rag-app-1-rqg6.onrender.com";
 
 export interface UploadResult {
   message: string;
