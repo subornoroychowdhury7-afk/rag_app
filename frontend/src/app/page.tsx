@@ -1,49 +1,37 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
-import Auth from "@/components/Auth";
+import { useEffect, useState } from "react";
 import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import Sidebar, { type Doc } from "@/components/Sidebar";
 import { getDocuments } from "@/lib/api";
-import {
-  clearAuthSession,
-  getAuthEmailSnapshot,
-  subscribeAuthSession,
-} from "@/lib/auth";
-import { getDarkModeSnapshot, setDarkMode, subscribeTheme } from "@/lib/theme";
 
 export default function Home() {
   const [docs, setDocs] = useState<Doc[]>([]);
-  const userEmail = useSyncExternalStore(subscribeAuthSession, getAuthEmailSnapshot, () => null);
-  const darkMode = useSyncExternalStore(subscribeTheme, getDarkModeSnapshot, () => false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
-    const handleUnauthorized = () => {
-      setDocs([]);
-    };
-    window.addEventListener("auth:unauthorized", handleUnauthorized);
-    return () => window.removeEventListener("auth:unauthorized", handleUnauthorized);
+    getDocuments().then(setDocs).catch(console.error);
   }, []);
 
+  /* ---- Dark mode: localStorage + system preference on mount ---- */
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", darkMode);
-  }, [darkMode]);
-
-  useEffect(() => {
-    if (!userEmail) return;
-    getDocuments()
-      .then(setDocs)
-      .catch((error: unknown) => {
-        if (!(error instanceof Error) || !error.message.includes("Authentication")) {
-          console.error(error);
-        }
-      });
-  }, [userEmail]);
+    const stored = localStorage.getItem("theme");
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (stored === "dark" || (!stored && prefersDark)) {
+      setDarkMode(true);
+      document.documentElement.classList.add("dark");
+    }
+  }, []);
 
   function toggleDark() {
-    setDarkMode(!darkMode);
+    setDarkMode((prev) => {
+      const next = !prev;
+      document.documentElement.classList.toggle("dark", next);
+      localStorage.setItem("theme", next ? "dark" : "light");
+      return next;
+    });
   }
 
   function handleUploaded(d: Doc) {
@@ -55,13 +43,6 @@ export default function Home() {
     setDocs((prev) => prev.filter((x) => x.name !== name));
   }
 
-  function handleSignOut() {
-    clearAuthSession();
-    setDocs([]);
-  }
-
-  if (!userEmail) return <Auth />;
-
   return (
     <div className="flex h-dvh flex-col">
       <Header
@@ -69,8 +50,6 @@ export default function Home() {
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         darkMode={darkMode}
         onToggleDark={toggleDark}
-        userEmail={userEmail}
-        onSignOut={handleSignOut}
       />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* Mobile backdrop */}

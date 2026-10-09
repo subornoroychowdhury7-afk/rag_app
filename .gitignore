@@ -1,6 +1,5 @@
 backend/.env
 backend/venv/
 backend/chroma_db/
-auth.sqlite3*
 __pycache__/
 .DS_Store
