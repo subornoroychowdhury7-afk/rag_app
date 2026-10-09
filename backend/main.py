@@ -4,14 +4,19 @@ POST /upload : PDF -> text -> overlapping chunks -> Gemini embeddings -> ChromaD
 POST /chat   : question -> embedding -> top-K similar chunks -> Gemini answer
 """
 
+import hashlib
 import logging
 import os
+import re
+import tempfile
 import time
 import uuid
 from io import BytesIO
 
 import chromadb
+import fitz
 import google.generativeai as genai
+import pytesseract
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -207,6 +212,52 @@ def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
     return result["embedding"]
 
 
+def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list[list[float]]:
+    """Embed many chunks through Gemini's batch endpoint (up to 100 per request)."""
+    result = call_gemini(
+        genai.embed_content,
+        model=EMBEDDING_MODEL,
+        content=texts,
+        task_type=task_type,
+        output_dimensionality=EMBEDDING_DIM,
+    )
+    embeddings = result["embedding"]
+    if len(embeddings) != len(texts):
+        raise ValueError(f"Gemini returned {len(embeddings)} embeddings for {len(texts)} chunks.")
+    return embeddings
+
+
+def extract_pdf_text(contents: bytes) -> str:
+    """Extract embedded text and OCR only pages that contain no selectable text."""
+    text_pages: list[str] = []
+    try:
+        document = fitz.open(stream=contents, filetype="pdf")
+        for page_number, page in enumerate(document, start=1):
+            page_text = page.get_text("text").strip()
+            if page_text:
+                text_pages.append(page_text)
+                continue
+
+            # Render at 200 DPI for a useful balance of OCR accuracy and speed.
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72), alpha=False)
+            from PIL import Image
+
+            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            page_text = pytesseract.image_to_string(image).strip()
+            text_pages.append(page_text)
+            logger.info("OCR page %d/%d: %d characters", page_number, len(document), len(page_text))
+        document.close()
+    except (fitz.FileDataError, fitz.EmptyFileError) as exc:
+        raise HTTPException(400, f"Could not read PDF: {exc}") from exc
+    except pytesseract.TesseractNotFoundError as exc:
+        logger.exception("Tesseract OCR engine is not installed")
+        raise HTTPException(503, "OCR is not available on this server. Install the Tesseract OCR engine.") from exc
+    except Exception as exc:
+        logger.exception("PDF text extraction or OCR failed")
+        raise HTTPException(422, f"Could not extract text from PDF: {exc}") from exc
+    return "\n".join(text_pages)
+
+
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
@@ -233,16 +284,16 @@ def upload(file: UploadFile = File(...)):
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
 
-    # 2. Extract text (in memory - nothing is written to disk)
+    # 2. Extract selectable text and OCR scanned pages (in memory - no PDF is saved).
     try:
         reader = PdfReader(BytesIO(contents))
         if reader.is_encrypted:
             raise HTTPException(400, "Encrypted PDFs are not supported.")
-        text = "\n".join((page.extract_text() or "") for page in reader.pages)
     except HTTPException:
         raise
     except (PdfReadError, ValueError, OSError, KeyError) as exc:
         raise HTTPException(400, f"Could not read PDF: {exc}") from exc
+    text = extract_pdf_text(contents)
 
     # 3. Chunk
     chunks = chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
@@ -252,7 +303,7 @@ def upload(file: UploadFile = File(...)):
     # 4. Embed every chunk BEFORE touching the database, so an API failure part-way
     #    can't leave a half-ingested document (or destroy the previous version).
     try:
-        embeddings = [embed_text(c, "retrieval_document") for c in chunks]
+        embeddings = embed_texts(chunks, "retrieval_document")
     except Exception as exc:
         logger.exception("Embedding failed for %s", filename)
         raise to_http_error(exc, "Embedding") from exc

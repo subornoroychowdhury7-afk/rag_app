@@ -5,3 +5,5 @@
   python-multipart
   pypdf
   python-dotenv
+  pymupdf
+  pytesseract
