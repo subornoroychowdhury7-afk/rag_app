@@ -3,5 +3,10 @@ backend/venv/
 backend/chroma_db/
 backend/auth.db
 auth.db
+auth.sqlite3*
+*.db
+*.sqlite3
 __pycache__/
 .DS_Store
+.env.local
+.vercel

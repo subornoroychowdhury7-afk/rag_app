@@ -35,7 +35,7 @@ from auth import get_current_user, router as auth_router  # noqa: E402
 logger = logging.getLogger("rag")
 logging.basicConfig(level=logging.INFO)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 API_KEY_OK = bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("your_")
 if not API_KEY_OK:
     logger.warning("GEMINI_API_KEY is not set - /upload and /chat will fail until it is.")
@@ -44,23 +44,23 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 # "models/text-embedding-004" was shut down on 2026-01-14. The same model + dimension
 # must be used for ingestion and for query embedding, otherwise search breaks.
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-2")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
+EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").strip()
+EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
-# Gemini 2.5 models are scheduled to shut down in October 2026 - override in .env.
-GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-2.5-flash")
+# Generation model (e.g. gemini-2.5-flash or gemini-2.0-flash)
+GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-2.5-flash").strip()
 generation_model = genai.GenerativeModel(GENERATION_MODEL)
 
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1800"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "180"))
+CHUNK_SIZE = int((os.getenv("CHUNK_SIZE") or "1800").strip())
+CHUNK_OVERLAP = int((os.getenv("CHUNK_OVERLAP") or "180").strip())
 TOP_K = 5
 
 # Cosine DISTANCE cutoff (0 = identical, ~1 = unrelated). Chunks further away than
 # this are treated as irrelevant; if none qualify, /chat refuses without calling the
 # LLM. Distances are logged on every /chat call - tune this if it is too strict/loose.
-MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "0.65"))
+MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.65").strip())
 
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))
+MAX_UPLOAD_MB = int((os.getenv("MAX_UPLOAD_MB") or "20").strip())
 MAX_QUERY_CHARS = 2000
 MAX_RETRIES = 4  # attempts per Gemini call on rate-limit / transient errors
 
@@ -79,7 +79,7 @@ User Question: {query}
 # Vector store. With CHROMA_API_KEY set (+ CHROMA_TENANT / CHROMA_DATABASE) the data lives
 # in Chroma Cloud, so the web server itself can be stateless and free-tier friendly.
 # Otherwise it falls back to a local on-disk store (set CHROMA_PATH to a mounted disk).
-CHROMA_API_KEY = os.getenv("CHROMA_API_KEY")
+CHROMA_API_KEY = (os.getenv("CHROMA_API_KEY") or "").strip()
 if CHROMA_API_KEY:
     chroma_client = chromadb.CloudClient(
         tenant=os.getenv("CHROMA_TENANT"),
@@ -89,27 +89,34 @@ if CHROMA_API_KEY:
     index_config = {"spann": {"space": "cosine"}}  # Chroma Cloud's index type
     logger.info("Using Chroma Cloud")
 else:
-    chroma_client = chromadb.PersistentClient(path=os.getenv("CHROMA_PATH", "./chroma_db"))
+    chroma_path = (os.getenv("CHROMA_PATH") or "./chroma_db").strip()
+    os.makedirs(os.path.abspath(chroma_path), exist_ok=True)
+    chroma_client = chromadb.PersistentClient(path=chroma_path)
     index_config = {"hnsw": {"space": "cosine"}}  # local index type
-    logger.info("Using local ChromaDB")
+    logger.info("Using local ChromaDB at %s", chroma_path)
 
 try:
     collection = chroma_client.get_or_create_collection(name="rag_collection", configuration=index_config)
 except Exception:  # e.g. the service rejects the index config - fall back to its defaults
-    logger.warning("Could not apply cosine index config; using ChromaDB defaults "
-                   "(retune MAX_DISTANCE using the logged distances).", exc_info=True)
+    logger.warning("Could not apply cosine index config; using ChromaDB defaults.", exc_info=True)
     collection = chroma_client.get_or_create_collection(name="rag_collection")
 
 app = FastAPI(title="RAG Backend")
 
-# Auth uses a Bearer token (not cookies), so wildcard origins are safe by default.
-# In production set ALLOWED_ORIGINS="https://your-app.vercel.app" (comma-separated).
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+# Auth uses Bearer token, so wildcard origins are safe and avoid Vercel preview domain CORS issues
+raw_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
+if raw_origins == "*":
+    origins = ["*"]
+else:
+    origins = [o.strip().rstrip("/") for o in raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=origins,
+    allow_credentials=False if origins == ["*"] else True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(auth_router)
@@ -129,11 +136,7 @@ class ChatRequest(BaseModel):
 # Helpers
 # --------------------------------------------------------------------------- #
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
-    """Split ``text`` into overlapping windows of at most ``chunk_size`` characters.
-
-    Empty/whitespace text -> []; text shorter than chunk_size -> one chunk;
-    overlap >= chunk_size -> ValueError (the window would never advance).
-    """
+    """Split text into overlapping windows."""
     if chunk_size <= 0:
         raise ValueError("chunk_size must be a positive integer")
     if overlap < 0 or overlap >= chunk_size:
@@ -173,8 +176,7 @@ RETRYABLE = (
 
 
 def call_gemini(fn, *args, **kwargs):
-    """Call a Gemini SDK function, retrying rate-limit/transient errors with
-    exponential backoff (1s, 2s, 4s). Other errors propagate immediately."""
+    """Call a Gemini SDK function, retrying rate-limit/transient errors with exponential backoff."""
     delay = 1.0
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -191,16 +193,13 @@ def call_gemini(fn, *args, **kwargs):
 def to_http_error(exc: Exception, action: str) -> HTTPException:
     """Translate a Gemini/SDK failure into a clear, user-facing HTTP error."""
     if isinstance(exc, gexc.ResourceExhausted):
-        return HTTPException(429, "The Gemini API rate limit or quota was reached. "
-                                  "Please wait a minute and try again.")
+        return HTTPException(429, "The Gemini API rate limit or quota was reached. Please wait a moment and try again.")
     if isinstance(exc, (gexc.Unauthenticated, gexc.PermissionDenied)) or (
         isinstance(exc, gexc.InvalidArgument) and "API key" in str(exc)
     ):
-        return HTTPException(500, "The Gemini API key is missing, invalid, or not permitted. "
-                                  "Check GEMINI_API_KEY in backend/.env.")
+        return HTTPException(500, "The Gemini API key is missing or invalid. Check GEMINI_API_KEY in environment variables.")
     if isinstance(exc, gexc.NotFound):
-        return HTTPException(502, f"Gemini model not found. Check EMBEDDING_MODEL / "
-                                  f"GENERATION_MODEL in backend/.env. ({exc})")
+        return HTTPException(502, f"Gemini model not found. Check EMBEDDING_MODEL / GENERATION_MODEL. ({exc})")
     if isinstance(exc, (gexc.ServiceUnavailable, gexc.DeadlineExceeded, gexc.InternalServerError)):
         return HTTPException(503, "The Gemini API is temporarily unavailable. Please try again shortly.")
     return HTTPException(502, f"{action} failed: {exc}")
@@ -208,12 +207,10 @@ def to_http_error(exc: Exception, action: str) -> HTTPException:
 
 def require_api_key() -> None:
     if not API_KEY_OK:
-        raise HTTPException(500, "GEMINI_API_KEY is not configured on the server (backend/.env).")
+        raise HTTPException(500, "GEMINI_API_KEY is not configured on the server.")
 
 
 def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
-    """Embed ``text``. Use "retrieval_document" when ingesting and "retrieval_query"
-    for user questions - the model embeds the two differently on purpose."""
     result = call_gemini(
         genai.embed_content,
         model=EMBEDDING_MODEL,
@@ -225,7 +222,6 @@ def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
 
 
 def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list[list[float]]:
-    """Embed in bounded batches, running two batches in parallel for large PDFs."""
     batches = [texts[i:i + 100] for i in range(0, len(texts), 100)]
 
     def embed_batch(batch: list[str]) -> list[list[float]]:
@@ -280,7 +276,7 @@ def ocr_pdf_with_gemini(contents: bytes) -> str:
     except urllib.error.HTTPError as exc:
         logger.exception("Gemini OCR request failed with HTTP %d", exc.code)
         if exc.code == 429:
-            raise HTTPException(429, "The Gemini API rate limit or quota was reached during OCR. Please wait and try again.") from exc
+            raise HTTPException(429, "The Gemini API rate limit or quota was reached during OCR.") from exc
         if exc.code in (401, 403):
             raise HTTPException(500, "The Gemini API key is missing, invalid, or not permitted for OCR.") from exc
         raise HTTPException(503, "Gemini OCR is temporarily unavailable. Please try again shortly.") from exc
@@ -330,7 +326,7 @@ def extract_pdf_text(contents: bytes) -> str:
         logger.warning("Tesseract is unavailable; falling back to Gemini PDF transcription")
         return ocr_pdf_with_gemini(contents)
     except Exception as exc:
-        logger.exception("PDF text extraction or OCR failed")
+        logger.exception("PDF text extraction failed")
         raise HTTPException(422, f"Could not extract text from PDF: {exc}") from exc
     finally:
         if document is not None:
@@ -348,8 +344,6 @@ def health():
 
 @app.post("/upload")
 def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-    # Plain `def`: PDF parsing and the Gemini SDK are blocking, so FastAPI runs this in
-    # its threadpool instead of stalling the event loop.
     require_api_key()
     user_id = str(user["id"])
 
@@ -365,7 +359,7 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
 
-    # 2. Extract selectable text and OCR scanned pages (in memory - no PDF is saved).
+    # 2. Extract selectable text and OCR scanned pages
     started_at = time.perf_counter()
     text = extract_pdf_text(contents)
     extracted_at = time.perf_counter()
@@ -373,10 +367,9 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
     # 3. Chunk
     chunks = chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
     if not chunks:
-        raise HTTPException(422, "No extractable text found (scanned/image-only PDFs need OCR).")
+        raise HTTPException(422, "No extractable text found in this PDF.")
 
-    # 4. Embed every chunk BEFORE touching the database, so an API failure part-way
-    #    can't leave a half-ingested document (or destroy the previous version).
+    # 4. Embed every chunk
     try:
         embeddings = embed_texts(chunks, "retrieval_document")
     except Exception as exc:
@@ -384,10 +377,14 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
         raise to_http_error(exc, "Embedding") from exc
     embedded_at = time.perf_counter()
 
-    # 5. Re-uploading a file replaces its earlier chunks instead of duplicating them
-    previous = collection.get(where=owned(user_id, filename), include=[])["ids"]
-    if previous:
-        collection.delete(ids=previous)
+    # 5. Replace previous version if re-uploaded
+    try:
+        previous = collection.get(where=owned(user_id, filename), include=[])["ids"]
+        if previous:
+            collection.delete(ids=previous)
+    except Exception as e:
+        logger.warning("Could not check previous chunks for %s: %s", filename, e)
+        previous = []
 
     collection.add(
         ids=[str(uuid.uuid4()) for _ in chunks],
@@ -399,9 +396,9 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
 
     completed_at = time.perf_counter()
     logger.info(
-        "Ingested %s: %d chunks (replaced %d); extraction %.2fs, embedding %.2fs, storage %.2fs, total %.2fs",
-        filename, len(chunks), len(previous), extracted_at - started_at,
-        embedded_at - extracted_at, completed_at - embedded_at, completed_at - started_at,
+        "Ingested %s: %d chunks; extraction %.2fs, embedding %.2fs, storage %.2fs, total %.2fs",
+        filename, len(chunks), extracted_at - started_at, embedded_at - extracted_at,
+        completed_at - embedded_at, completed_at - started_at,
     )
     return {"message": "Upload successful", "filename": filename, "chunks_processed": len(chunks)}
 
@@ -409,23 +406,29 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
 @app.get("/documents")
 def get_documents(user: dict = Depends(get_current_user)):
     """List the logged-in user's documents and their chunk counts."""
-    results = collection.get(where={"user_id": str(user["id"])}, include=["metadatas"])
-    metadatas = results["metadatas"] or []
-    docs = {}
-    for meta in metadatas:
-        source = meta.get("source", "unknown")
-        docs[source] = docs.get(source, 0) + 1
-    return [{"name": name, "chunks": count} for name, count in docs.items()]
+    user_id = str(user["id"])
+    try:
+        results = collection.get(where={"user_id": user_id}, include=["metadatas"])
+        metadatas = results.get("metadatas") or []
+        docs = {}
+        for meta in metadatas:
+            source = meta.get("source", "unknown")
+            docs[source] = docs.get(source, 0) + 1
+        return [{"name": name, "chunks": count} for name, count in docs.items()]
+    except Exception as e:
+        logger.exception("Failed to fetch documents for user %s: %s", user_id, e)
+        return []
 
 
 @app.delete("/documents/{filename:path}")
 def delete_document(filename: str, user: dict = Depends(get_current_user)):
-    """Remove the logged-in user's chunks for `filename` from the vector store."""
-    results = collection.get(where=owned(str(user["id"]), filename), include=[])
+    """Remove the logged-in user's chunks for filename from the vector store."""
+    user_id = str(user["id"])
+    results = collection.get(where=owned(user_id, filename), include=[])
     if not results["ids"]:
         raise HTTPException(404, f"No document found with name '{filename}'.")
     collection.delete(ids=results["ids"])
-    logger.info("Deleted %d chunks for %s", len(results["ids"]), filename)
+    logger.info("Deleted %d chunks for %s by user %s", len(results["ids"]), filename, user_id)
     return {"message": "Document deleted", "filename": filename, "chunks_deleted": len(results["ids"])}
 
 
@@ -439,19 +442,19 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
 
-    # Nothing ingested by this user yet -> no context, so don't spend an API call.
+    # Nothing ingested by this user yet -> no context, don't spend an API call
     total = len(collection.get(where={"user_id": user_id}, include=[])["ids"])
     if total == 0:
         return {"answer": NO_ANSWER, "sources": [], "source_files": []}
 
-    # 1. Embed the query (same model + dimension as the stored chunks)
+    # 1. Embed query
     try:
         query_vector = embed_text(query, "retrieval_query")
     except Exception as exc:
         logger.exception("Query embedding failed")
         raise to_http_error(exc, "Embedding") from exc
 
-    # 2. Vector search, then keep only chunks that are actually relevant
+    # 2. Vector search
     results = collection.query(
         query_embeddings=[query_vector],
         n_results=min(TOP_K, total),
@@ -468,29 +471,26 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
     retrieved_chunks = [doc for doc, _, _ in relevant]
     source_files = sorted({(meta or {}).get("source", "unknown") for _, meta, _ in relevant})
 
-    # Nothing relevant -> refuse deterministically; the LLM never gets a chance to guess.
     if not retrieved_chunks:
         return {"answer": NO_ANSWER, "sources": [], "source_files": []}
 
-    # 3. Build the strict prompt around the retrieved context
+    # 3. Build strict prompt
     context_string = "\n\n---\n\n".join(retrieved_chunks)
     prompt = PROMPT_TEMPLATE.format(context_string=context_string, query=query)
 
     # 4. Generate
     gemini_history = []
     for msg in request.history:
-        # map "assistant" to "model" for Gemini
         role = "model" if msg.role == "assistant" else "user"
         gemini_history.append({"role": role, "parts": [msg.content]})
 
     try:
         chat_session = generation_model.start_chat(history=gemini_history)
         response = call_gemini(chat_session.send_message, prompt)
-        answer = response.text  # raises ValueError if the response was blocked/empty
+        answer = response.text
     except ValueError as exc:
         logger.warning("Response blocked or empty: %s", exc)
-        raise HTTPException(502, "The model returned no answer (the response was blocked or empty). "
-                                 "Try rephrasing your question.") from exc
+        raise HTTPException(502, "The model returned no answer (blocked or empty). Try rephrasing your question.") from exc
     except Exception as exc:
         logger.exception("Generation failed")
         raise to_http_error(exc, "Generation") from exc

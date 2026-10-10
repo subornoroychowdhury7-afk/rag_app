@@ -5,8 +5,9 @@ interface HeaderProps {
   onToggleSidebar: () => void;
   darkMode: boolean;
   onToggleDark: () => void;
-  userEmail?: string;
+  userEmail?: string | null;
   onLogout?: () => void;
+  onSignOut?: () => void;
 }
 
 export default function Header({
@@ -16,7 +17,10 @@ export default function Header({
   onToggleDark,
   userEmail,
   onLogout,
+  onSignOut,
 }: HeaderProps) {
+  const handleLogout = onLogout || onSignOut;
+
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-lg dark:border-slate-700/50 dark:bg-slate-900/80">
       <div className="flex items-center gap-3">
@@ -45,10 +49,10 @@ export default function Header({
         </h1>
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
         {userEmail && (
           <span
-            className="mr-1 hidden max-w-[16rem] truncate text-sm text-slate-500 dark:text-slate-400 sm:inline"
+            className="mr-1 hidden max-w-[16rem] truncate text-xs sm:text-sm text-slate-500 dark:text-slate-400 sm:inline"
             title={userEmail}
           >
             {userEmail}
@@ -81,10 +85,10 @@ export default function Header({
         </button>
 
         {/* Logout */}
-        {onLogout && (
+        {handleLogout && (
           <button
-            onClick={onLogout}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
             aria-label="Log out"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

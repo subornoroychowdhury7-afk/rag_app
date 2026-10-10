@@ -1,5 +1,8 @@
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "https://rag-app-1-rqg6.onrender.com";
+import { clearAuthSession, getAuthEmail, getAuthToken, setAuthSession } from "./auth";
+
+export const API_URL = (
+  process.env.NEXT_PUBLIC_API_URL ?? "https://rag-app-1-rqg6.onrender.com"
+).replace(/\/+$/, "");
 
 /* ---------- Types ------------------------------------------------- */
 
@@ -22,12 +25,15 @@ export interface DeleteResult {
 }
 
 export interface AuthUser {
-  id: number;
+  id?: number | string;
   email: string;
 }
 
 export interface AuthResult {
   token: string;
+  access_token?: string;
+  token_type?: string;
+  expires_in?: number;
   user: AuthUser;
 }
 
@@ -38,27 +44,33 @@ export interface ChatMessage {
 
 /* ---------- Session token ----------------------------------------- */
 
-const TOKEN_KEY = "docqa_token";
-
-/** Fired when the server says our session is no longer valid (expired/invalid token). */
 export const AUTH_EXPIRED_EVENT = "docqa:auth-expired";
 
 export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
+  return getAuthToken();
+}
+
+export function setToken(token: string | null, email?: string): void {
+  if (token) {
+    setAuthSession(token, email || getAuthEmail() || "");
+  } else {
+    clearAuthSession();
   }
 }
 
-export function setToken(token: string | null): void {
-  if (typeof window === "undefined") return;
+export function getUserFromToken(token: string): AuthUser | null {
   try {
-    if (token) window.localStorage.setItem(TOKEN_KEY, token);
-    else window.localStorage.removeItem(TOKEN_KEY);
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const jsonStr = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
+    const payload = JSON.parse(jsonStr);
+    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
+    return {
+      id: payload.sub,
+      email: payload.email || getAuthEmail() || "",
+    };
   } catch {
-    /* storage unavailable (private mode etc.) - the session just won't persist */
+    return null;
   }
 }
 
@@ -68,7 +80,6 @@ function errorDetail(body: unknown, fallback: string): string {
   if (body && typeof body === "object" && "detail" in body) {
     const detail = (body as { detail: unknown }).detail;
     if (typeof detail === "string") return detail;
-    // FastAPI validation errors arrive as a list of {msg: ...}
     if (Array.isArray(detail)) {
       const msgs = detail
         .map((d) => (d && typeof d === "object" && "msg" in d ? String((d as { msg: unknown }).msg) : ""))
@@ -94,16 +105,18 @@ async function request<T>(path: string, init: RequestInit = {}, authed = true): 
   }
 
   if (!res.ok) {
-    if (res.status === 401 && authed) {
-      // Session expired or token invalid: drop it and let the app show the login screen.
-      setToken(null);
-      if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    if (res.status === 401 && authed && !path.startsWith("/auth/")) {
+      clearAuthSession();
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+        window.dispatchEvent(new Event("auth:unauthorized"));
+      }
     }
     let body: unknown = null;
     try {
       body = await res.json();
     } catch {
-      /* non-JSON error body - keep the generic message */
+      /* non-JSON error body */
     }
     throw new Error(errorDetail(body, `Request failed (${res.status})`));
   }
@@ -121,23 +134,62 @@ function jsonPost(body: unknown): RequestInit {
 }
 
 export async function login(email: string, password: string): Promise<AuthResult> {
-  const res = await request<AuthResult>("/auth/login", jsonPost({ email, password }), false);
-  setToken(res.token);
-  return res;
+  const cleanEmail = email.trim().toLowerCase();
+  const res = await request<any>("/auth/login", jsonPost({ email: cleanEmail, password }), false);
+  const token = res.token || res.access_token;
+  if (!token) throw new Error("Login failed: No authentication token received.");
+  const user: AuthUser = res.user?.email
+    ? { id: res.user.id, email: res.user.email }
+    : { email: cleanEmail };
+  setAuthSession(token, user.email);
+  return { token, user, access_token: token };
 }
 
 export async function register(email: string, password: string): Promise<AuthResult> {
-  const res = await request<AuthResult>("/auth/register", jsonPost({ email, password }), false);
-  setToken(res.token);
-  return res;
+  const cleanEmail = email.trim().toLowerCase();
+  const res = await request<any>("/auth/register", jsonPost({ email: cleanEmail, password }), false);
+  const token = res.token || res.access_token;
+  if (!token) throw new Error("Registration failed: No authentication token received.");
+  const user: AuthUser = res.user?.email
+    ? { id: res.user.id, email: res.user.email }
+    : { email: cleanEmail };
+  setAuthSession(token, user.email);
+  return { token, user, access_token: token };
 }
 
-export function getMe() {
-  return request<{ user: AuthUser }>("/auth/me", { method: "GET" });
+export async function getMe(): Promise<{ user: AuthUser }> {
+  try {
+    const res = await request<any>("/auth/me", { method: "GET" });
+    if (res && res.user && res.user.email) {
+      return { user: res.user };
+    }
+    if (res && res.email) {
+      return { user: { id: res.id, email: res.email } };
+    }
+  } catch (err) {
+    const token = getToken();
+    if (token) {
+      const decoded = getUserFromToken(token);
+      if (decoded && decoded.email) {
+        return { user: decoded };
+      }
+    }
+    throw err;
+  }
+  const token = getToken();
+  if (token) {
+    const decoded = getUserFromToken(token);
+    if (decoded && decoded.email) return { user: decoded };
+  }
+  throw new Error("Unable to retrieve user session");
 }
 
 export function logout(): void {
-  setToken(null);
+  clearAuthSession();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    window.dispatchEvent(new Event("auth:unauthorized"));
+  }
 }
 
 /* ---------- Documents & chat -------------------------------------- */

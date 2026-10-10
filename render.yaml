@@ -4,21 +4,18 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     healthCheckPath: /health
-    disk:
-      name: docqa-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: CHROMA_PATH
-        value: /var/data/chroma_db
+        value: ./chroma_db
       - key: AUTH_DB_PATH
-        value: /var/data/auth.db
+        value: ./auth.db
       - key: JWT_SECRET
+        generateValue: true
+      - key: AUTH_SECRET
         generateValue: true
       - key: GEMINI_API_KEY
         sync: false
-      # Set to your Vercel URL, e.g. https://rag-app-blush.vercel.app (comma-separated for several)
       - key: ALLOWED_ORIGINS
         value: "*"

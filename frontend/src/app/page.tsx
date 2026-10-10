@@ -11,9 +11,11 @@ import {
   getDocuments,
   getMe,
   getToken,
+  getUserFromToken,
   logout,
   type AuthUser,
 } from "@/lib/api";
+import { AUTH_CHANGED_EVENT } from "@/lib/auth";
 
 export default function Home() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -22,40 +24,72 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
-  /* ---- Restore a saved session on first load ---- */
+  /* ---- Restore saved session on first load ---- */
   useEffect(() => {
-    if (!getToken()) {
+    const token = getToken();
+    if (!token) {
       setAuthChecked(true);
       return;
     }
+
+    // Quick initial populate from token so UI renders fast
+    const quickUser = getUserFromToken(token);
+    if (quickUser) {
+      setUser(quickUser);
+    }
+
     getMe()
-      .then((res) => setUser(res.user))
-      .catch(() => {
-        /* 401 already cleared the token; any other error just shows the login screen */
+      .then((res) => {
+        if (res?.user) {
+          setUser(res.user);
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not verify session with /auth/me:", err);
+        // If token has expired or is invalid, clear it
+        if (!quickUser) {
+          logout();
+          setUser(null);
+        }
       })
       .finally(() => setAuthChecked(true));
   }, []);
 
-  /* ---- Session expired while using the app -> back to the login screen ---- */
+  /* ---- Listen for auth expiration or manual change ---- */
   useEffect(() => {
-    const onExpired = () => {
-      setUser(null);
-      setDocs([]);
-      setSidebarOpen(false);
+    const onAuthReset = () => {
+      const token = getToken();
+      if (!token) {
+        setUser(null);
+        setDocs([]);
+        setSidebarOpen(false);
+      } else {
+        const u = getUserFromToken(token);
+        if (u) setUser(u);
+      }
     };
-    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
-    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+
+    window.addEventListener(AUTH_EXPIRED_EVENT, onAuthReset);
+    window.addEventListener("auth:unauthorized", onAuthReset);
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthReset);
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthReset);
+      window.removeEventListener("auth:unauthorized", onAuthReset);
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthReset);
+    };
   }, []);
 
-  /* ---- Load this user's documents whenever someone logs in ---- */
+  /* ---- Load user documents whenever logged in ---- */
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
     getDocuments()
       .then((list) => {
-        if (!cancelled) setDocs(list);
+        if (!cancelled && Array.isArray(list)) setDocs(list);
       })
-      .catch(console.error);
+      .catch((err) => {
+        console.error("Failed to fetch documents:", err);
+      });
     return () => {
       cancelled = true;
     };
