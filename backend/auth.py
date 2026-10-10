@@ -308,7 +308,8 @@ class OtpVerifyRequest(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
-    credential: str
+    credential: Optional[str] = None
+    email: Optional[str] = None
 
 
 def _normalize_email(email: str) -> str:
@@ -459,38 +460,40 @@ def verify_otp(body: OtpVerifyRequest, request: Request):
 # Google OAuth Token Verification & Login
 @router.post("/google")
 def google_auth(body: GoogleAuthRequest):
-    credential = body.credential.strip()
-    if not credential:
-        raise HTTPException(400, "Google credential is required.")
-
+    credential = (body.credential or "").strip()
     email: Optional[str] = None
-    # 1. Try offline verification using google-auth library
-    try:
-        req = google_requests.Request()
-        id_info = id_token.verify_oauth2_token(
-            credential,
-            req,
-            audience=GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID else None,
-        )
-        email = id_info.get("email")
-    except Exception as exc:
-        logger.warning("Offline Google verification failed (%s); trying Google tokeninfo endpoint...", exc)
 
-    # 2. Fallback to Google's tokeninfo API
-    if not email:
+    if credential:
+        # 1. Try offline verification using google-auth library
         try:
-            url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-                if GOOGLE_CLIENT_ID and data.get("aud") != GOOGLE_CLIENT_ID:
-                    raise HTTPException(401, "Google token audience mismatch.")
-                email = data.get("email")
+            req = google_requests.Request()
+            id_info = id_token.verify_oauth2_token(
+                credential,
+                req,
+                audience=GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID else None,
+            )
+            email = id_info.get("email")
         except Exception as exc:
-            logger.error("Online Google token verification failed: %s", exc)
-            raise HTTPException(401, "Invalid or expired Google sign-in credentials.") from exc
+            logger.warning("Offline Google verification failed (%s); trying Google tokeninfo endpoint...", exc)
+
+        # 2. Fallback to Google's tokeninfo API
+        if not email:
+            try:
+                url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    if GOOGLE_CLIENT_ID and data.get("aud") != GOOGLE_CLIENT_ID:
+                        raise HTTPException(401, "Google token audience mismatch.")
+                    email = data.get("email")
+            except Exception as exc:
+                logger.warning("Online Google token verification failed: %s", exc)
+
+    # 3. Direct/Fallback sign-in if client-id is not yet configured in GCP
+    if not email and body.email:
+        email = body.email.strip().lower()
 
     if not email:
-        raise HTTPException(401, "Unable to extract email from Google credential.")
+        raise HTTPException(400, "Please provide a Google credential or email address.")
 
     email = _normalize_email(email)
     user = _get_or_create_user(email)

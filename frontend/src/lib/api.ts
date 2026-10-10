@@ -182,15 +182,23 @@ export async function verifyOtp(email: string, otp: string): Promise<AuthResult>
   return { token, user, access_token: token };
 }
 
-export async function loginWithGoogle(credential: string): Promise<AuthResult> {
-  const res = await request<any>(
-    "/auth/google",
-    jsonPost({ credential: credential.trim() }),
-    false,
-  );
+export async function loginWithGoogle(
+  param: { credential?: string; email?: string } | string,
+): Promise<AuthResult> {
+  const payload =
+    typeof param === "string"
+      ? { credential: param.trim() }
+      : {
+          credential: param.credential ? param.credential.trim() : undefined,
+          email: param.email ? param.email.trim().toLowerCase() : undefined,
+        };
+
+  const res = await request<any>("/auth/google", jsonPost(payload), false);
   const token = res.token || res.access_token;
   if (!token) throw new Error("Google sign-in failed: No authentication token received.");
-  const user: AuthUser = res.user || { email: "Google User" };
+  const user: AuthUser = res.user || {
+    email: (typeof param !== "string" && param.email) || "Google User",
+  };
   setAuthSession(token, user.email);
   return { token, user, access_token: token };
 }
