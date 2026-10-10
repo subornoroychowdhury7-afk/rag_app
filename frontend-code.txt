@@ -1,0 +1,842 @@
+===== package.json ===== 
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+===== src\lib\api.ts ===== 
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "https://rag-app-1-rqg6.onrender.com";
+
+export interface UploadResult {
+  message: string;
+  filename: string;
+  chunks_processed: number;
+}
+
+export interface ChatResult {
+  answer: string;
+  sources: string[];
+}
+
+export interface DeleteResult {
+  message: string;
+  filename: string;
+  chunks_deleted: number;
+}
+
+async function request<T>(path: string, init: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, init);
+  } catch {
+    throw new Error(`Can't reach the backend at ${API_URL}. Is uvicorn running?`);
+  }
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* non-JSON error body - keep the generic message */
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+export function uploadPdf(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  return request<UploadResult>("/upload", { method: "POST", body: form });
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export function sendChat(query: string, history: ChatMessage[] = []) {
+  return request<ChatResult>("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, history }),
+  });
+}
+
+export function deleteDocument(filename: string) {
+  return request<DeleteResult>(`/documents/${encodeURIComponent(filename)}`, {
+    method: "DELETE",
+  });
+}
+
+export function getDocuments() {
+  return request<{ name: string; chunks: number }[]>("/documents", {
+    method: "GET",
+  });
+}
+===== src\app\page.tsx ===== 
+"use client";
+
+import { useEffect, useState } from "react";
+import Chat from "@/components/Chat";
+import Header from "@/components/Header";
+import Sidebar, { type Doc } from "@/components/Sidebar";
+import { getDocuments } from "@/lib/api";
+
+export default function Home() {
+  const [docs, setDocs] = useState<Doc[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+
+  useEffect(() => {
+    getDocuments().then(setDocs).catch(console.error);
+  }, []);
+
+  /* ---- Dark mode: localStorage + system preference on mount ---- */
+  useEffect(() => {
+    const stored = localStorage.getItem("theme");
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (stored === "dark" || (!stored && prefersDark)) {
+      setDarkMode(true);
+      document.documentElement.classList.add("dark");
+    }
+  }, []);
+
+  function toggleDark() {
+    setDarkMode((prev) => {
+      const next = !prev;
+      document.documentElement.classList.toggle("dark", next);
+      localStorage.setItem("theme", next ? "dark" : "light");
+      return next;
+    });
+  }
+
+  function handleUploaded(d: Doc) {
+    setDocs((prev) => [...prev.filter((x) => x.name !== d.name), d]);
+    setSidebarOpen(false); // close sidebar on mobile after upload
+  }
+
+  function handleDeleted(name: string) {
+    setDocs((prev) => prev.filter((x) => x.name !== name));
+  }
+
+  return (
+    <div className="flex h-dvh flex-col">
+      <Header
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((p) => !p)}
+        darkMode={darkMode}
+        onToggleDark={toggleDark}
+      />
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {/* Mobile backdrop */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm transition-opacity md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+        <Sidebar
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          docs={docs}
+          onUploaded={handleUploaded}
+          onDeleted={handleDeleted}
+        />
+        <Chat hasDocs={docs.length > 0} />
+      </div>
+    </div>
+  );
+}
+===== src\app\layout.tsx ===== 
+import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "DocQ&A — AI Document Assistant",
+  description: "Ask questions about your PDFs, answered only from what they say.",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body className="antialiased">{children}</body>
+    </html>
+  );
+}
+===== src\components\Chat.tsx ===== 
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { sendChat } from "@/lib/api";
+import MarkdownRenderer from "./MarkdownRenderer";
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  sources?: string[];
+  isError?: boolean;
+  timestamp: Date;
+}
+
+/* ---------- Sub-components ---------------------------------------- */
+
+function TypingIndicator() {
+  return (
+    <div className="animate-fade-in-up flex items-start gap-3">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 shadow-sm">
+        <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
+          />
+        </svg>
+      </div>
+      <div className="rounded-2xl rounded-tl-md border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+        <div className="flex items-center gap-1.5">
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="inline-block h-2 w-2 rounded-full bg-indigo-400 dark:bg-indigo-500"
+              style={{
+                animation: "bounce-dot 1.4s ease-in-out infinite",
+                animationDelay: `${i * 0.16}s`,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Sources({ sources }: { sources: string[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <details className="group mt-2 ml-11 text-sm">
+      <summary className="cursor-pointer select-none font-medium text-slate-500 transition-colors hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400">
+        📎 {sources.length} source{sources.length !== 1 ? "s" : ""} referenced
+      </summary>
+      <ul className="mt-2 space-y-2">
+        {sources.map((s, i) => (
+          <li
+            key={i}
+            className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50"
+          >
+            <p className="mb-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+              Passage {i + 1}
+            </p>
+            <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+              {s}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="rounded-md p-1 text-slate-400 opacity-0 transition-all hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+      title="Copy response"
+    >
+      {copied ? (
+        <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+      ) : (
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+          />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/* ---------- Main component ---------------------------------------- */
+
+const MAX_CHARS = 2000;
+
+export default function Chat({ hasDocs }: { hasDocs: boolean }) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 100);
+  }
+
+  function scrollToBottom() {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  async function submit() {
+    const query = input.trim();
+    if (!query || loading) return;
+    setInput("");
+    setMessages((m) => [...m, { role: "user", content: query, timestamp: new Date() }]);
+    setLoading(true);
+    try {
+      const history = messages
+        .filter((m) => !m.isError)
+        .map((m) => ({ role: m.role, content: m.content }));
+      const res = await sendChat(query, history);
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: res.answer, sources: res.sources, timestamp: new Date() },
+      ]);
+    } catch (err) {
+      const content = err instanceof Error ? err.message : "Something went wrong.";
+      setMessages((m) => [...m, { role: "assistant", content, isError: true, timestamp: new Date() }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-slate-50/50 dark:bg-slate-950">
+      {/* Messages */}
+      <div ref={scrollRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto px-4 py-6 md:px-10">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5">
+          {/* Clear conversation */}
+          {messages.length > 0 && !loading && (
+            <div className="flex justify-center">
+              <button
+                onClick={() => setMessages([])}
+                className="rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-200"
+              >
+                ✕ Clear conversation
+              </button>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {messages.length === 0 && (
+            <div className="animate-fade-in-up mt-20 flex flex-col items-center text-center">
+              <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+                <svg
+                  className="h-10 w-10 text-white"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+                  />
+                </svg>
+              </div>
+              <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-200">
+                {hasDocs ? "Ask anything about your documents" : "Upload a PDF to get started"}
+              </h2>
+              <p className="mt-2 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+                {hasDocs
+                  ? "I'll search through your uploaded documents and provide answers with source references."
+                  : "Drop a PDF in the sidebar and I'll index it for intelligent Q&A."}
+              </p>
+              {hasDocs && (
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  {["Summarize the key points", "What are the main findings?", "Explain the methodology"].map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => setInput(q)}
+                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm transition-all hover:border-indigo-300 hover:text-indigo-700 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-indigo-600 dark:hover:text-indigo-300"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Message bubbles */}
+          {messages.map((m, i) =>
+            m.role === "user" ? (
+              <div key={i} className="animate-fade-in-up flex justify-end">
+                <div className="flex max-w-[80%] flex-col items-end gap-1">
+                  <p className="whitespace-pre-wrap rounded-2xl rounded-br-md bg-gradient-to-r from-indigo-500 to-violet-600 px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm">
+                    {m.content}
+                  </p>
+                  <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                    {formatTime(m.timestamp)}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div key={i} className="animate-fade-in-up flex flex-col">
+                <div className="group flex items-start gap-3">
+                  {/* Bot avatar */}
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 shadow-sm">
+                    <svg
+                      className="h-4 w-4 text-white"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
+                      />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className={`rounded-2xl rounded-tl-md border px-4 py-2.5 text-sm leading-relaxed ${
+                        m.isError
+                          ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300"
+                          : "border-slate-200 bg-white text-slate-800 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      }`}
+                    >
+                      {m.isError ? m.content : <MarkdownRenderer content={m.content} />}
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                        {formatTime(m.timestamp)}
+                      </span>
+                      {!m.isError && <CopyButton text={m.content} />}
+                    </div>
+                  </div>
+                </div>
+                {m.sources && <Sources sources={m.sources} />}
+              </div>
+            ),
+          )}
+
+          {loading && <TypingIndicator />}
+          <div ref={endRef} />
+        </div>
+
+        {/* Scroll-to-bottom FAB */}
+        {showScrollBtn && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-4 right-4 rounded-full border border-slate-200 bg-white p-2 shadow-lg transition-all hover:shadow-xl dark:border-slate-700 dark:bg-slate-800 md:right-10"
+            aria-label="Scroll to bottom"
+          >
+            <svg
+              className="h-5 w-5 text-slate-500 dark:text-slate-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {/* Input area */}
+      <div className="border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900 md:px-10">
+        <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              rows={1}
+              placeholder={
+                hasDocs ? "Ask a question about your documents…" : "Upload a PDF first to start asking questions…"
+              }
+              disabled={!hasDocs}
+              aria-label="Your question"
+              className="max-h-40 min-h-11 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500"
+            />
+            <button
+              onClick={submit}
+              disabled={loading || !input.trim() || !hasDocs}
+              className="flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 px-5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
+                />
+              </svg>
+              Send
+            </button>
+          </div>
+          <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 dark:text-slate-500">
+            <span>Enter to send · Shift+Enter for new line</span>
+            <span className={input.length > MAX_CHARS * 0.9 ? "text-red-500" : ""}>
+              {input.length > 0 ? `${input.length}/${MAX_CHARS}` : ""}
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+===== src\components\Sidebar.tsx ===== 
+"use client";
+
+import { useRef, useState } from "react";
+import { uploadPdf, deleteDocument } from "@/lib/api";
+import Spinner from "./Spinner";
+
+export interface Doc {
+  name: string;
+  chunks: number;
+}
+
+type Status =
+  | { kind: "idle" }
+  | { kind: "uploading"; name: string }
+  | { kind: "success"; name: string; chunks: number }
+  | { kind: "error"; message: string };
+
+interface SidebarProps {
+  isOpen: boolean;
+  onClose: () => void;
+  docs: Doc[];
+  onUploaded: (d: Doc) => void;
+  onDeleted: (name: string) => void;
+}
+
+export default function Sidebar({ isOpen, onClose, docs, onUploaded, onDeleted }: SidebarProps) {
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [dragging, setDragging] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const busy = status.kind === "uploading";
+
+  async function handleFile(file: File | undefined) {
+    if (!file || busy) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setStatus({ kind: "error", message: "Only PDF files are supported." });
+      return;
+    }
+    setStatus({ kind: "uploading", name: file.name });
+    try {
+      const res = await uploadPdf(file);
+      onUploaded({ name: res.filename, chunks: res.chunks_processed });
+      setStatus({ kind: "success", name: res.filename, chunks: res.chunks_processed });
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Upload failed." });
+    } finally {
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function handleDelete(name: string) {
+    if (deleting) return;
+    setDeleting(name);
+    try {
+      await deleteDocument(name);
+      onDeleted(name);
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Delete failed." });
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  return (
+    <aside
+      className={`absolute inset-y-0 left-0 z-50 flex w-80 shrink-0 transform flex-col gap-5 border-r border-slate-200 bg-white/90 p-5 backdrop-blur-xl transition-transform duration-300 ease-in-out dark:border-slate-700/50 dark:bg-slate-900/90 md:static md:translate-x-0 ${
+        isOpen ? "translate-x-0 shadow-2xl md:shadow-none" : "-translate-x-full"
+      }`}
+    >
+      {/* Sidebar header */}
+      <div>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+              Documents
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Upload PDFs to query them
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300 md:hidden"
+            aria-label="Close sidebar"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {/* Upload area */}
+      <label
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          handleFile(e.dataTransfer.files[0]);
+        }}
+        className={`flex cursor-pointer flex-col items-center gap-3 rounded-xl border-2 border-dashed px-4 py-8 text-center transition-all duration-200 focus-within:ring-2 focus-within:ring-indigo-500 ${
+          dragging
+            ? "border-indigo-500 bg-indigo-50 shadow-inner dark:border-indigo-400 dark:bg-indigo-950/30"
+            : "border-slate-300 hover:border-indigo-400 hover:bg-slate-50 dark:border-slate-600 dark:hover:border-indigo-500 dark:hover:bg-slate-800/50"
+        } ${busy ? "pointer-events-none opacity-60" : ""}`}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          className="sr-only"
+          disabled={busy}
+          onChange={(e) => handleFile(e.target.files?.[0])}
+        />
+        {busy ? (
+          <Spinner className="h-8 w-8 text-indigo-500" />
+        ) : (
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 dark:bg-indigo-950/50">
+            <svg
+              className="h-6 w-6 text-indigo-500"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+        )}
+        <div>
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            {busy ? "Processing…" : "Drop a PDF or click to browse"}
+          </span>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            PDFs up to 20 MB, including scanned pages
+          </p>
+        </div>
+      </label>
+
+      {/* Status messages */}
+      <div aria-live="polite" className="text-sm">
+        {status.kind === "uploading" && (
+          <div className="flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300">
+            <Spinner className="h-4 w-4" />
+            <span>
+              Indexing <span className="truncate font-medium">{status.name}</span>
+            </span>
+          </div>
+        )}
+        {status.kind === "success" && (
+          <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+            <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span>
+              <span className="font-medium">{status.name}</span> ready ({status.chunks} chunks)
+            </span>
+          </div>
+        )}
+        {status.kind === "error" && (
+          <div
+            role="alert"
+            className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-red-700 dark:bg-red-950/30 dark:text-red-300"
+          >
+            <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+              />
+            </svg>
+            {status.message}
+          </div>
+        )}
+      </div>
+
+      {/* Document list */}
+      {docs.length > 0 && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            {docs.length} document{docs.length !== 1 ? "s" : ""} indexed
+          </h3>
+          <ul className="space-y-1.5">
+            {docs.map((d, i) => (
+              <li
+                key={`${d.name}-${i}`}
+                className="animate-slide-in-left group flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2.5 transition-colors hover:bg-slate-100 dark:bg-slate-800/50 dark:hover:bg-slate-800"
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-950/50">
+                    <svg
+                      className="h-4 w-4 text-indigo-600 dark:text-indigo-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+                      />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-slate-800 dark:text-slate-200" title={d.name}>
+                      {d.name}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{d.chunks} chunks</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDelete(d.name)}
+                  disabled={deleting === d.name}
+                  className="shrink-0 rounded-md p-1 text-slate-400 opacity-0 transition-all hover:bg-red-100 hover:text-red-600 group-hover:opacity-100 disabled:opacity-50 dark:hover:bg-red-950/50 dark:hover:text-red-400"
+                  title="Delete document"
+                >
+                  {deleting === d.name ? (
+                    <Spinner className="h-4 w-4" />
+                  ) : (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </aside>
+  );
+}
+===== src\components\Header.tsx ===== 
+"use client";
+
+interface HeaderProps {
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
+  darkMode: boolean;
+  onToggleDark: () => void;
+}
+
+export default function Header({ sidebarOpen, onToggleSidebar, darkMode, onToggleDark }: HeaderProps) {
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-lg dark:border-slate-700/50 dark:bg-slate-900/80">
+      <div className="flex items-center gap-3">
+        {/* Mobile sidebar toggle */}
+        <button
+          onClick={onToggleSidebar}
+          className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200 md:hidden"
+          aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+        >
+          {sidebarOpen ? (
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          ) : (
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          )}
+        </button>
+
+        {/* Logo */}
+        <h1 className="text-lg font-bold tracking-tight">
+          <span className="bg-gradient-to-r from-indigo-500 to-violet-600 bg-clip-text text-transparent">
+            DocQ&amp;A
+          </span>
+        </h1>
+      </div>
+
+      {/* Dark mode toggle */}
+      <button
+        onClick={onToggleDark}
+        className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+        aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+      >
+        {darkMode ? (
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
+            />
+          </svg>
+        ) : (
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
+            />
+          </svg>
+        )}
+      </button>
+    </header>
+  );
+}

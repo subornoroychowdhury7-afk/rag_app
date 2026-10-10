@@ -15,11 +15,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import chromadb
-import fitz
+import pymupdf as fitz
 import google.generativeai as genai
 import pytesseract
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core import exceptions as gexc
 from pydantic import BaseModel
@@ -28,6 +28,9 @@ from pydantic import BaseModel
 # Configuration
 # --------------------------------------------------------------------------- #
 load_dotenv()
+
+# Imported after load_dotenv() so JWT_SECRET / AUTH_DB_PATH from .env are visible to it.
+from auth import get_current_user, router as auth_router  # noqa: E402
 
 logger = logging.getLogger("rag")
 logging.basicConfig(level=logging.INFO)
@@ -99,12 +102,17 @@ except Exception:  # e.g. the service rejects the index config - fall back to it
 
 app = FastAPI(title="RAG Backend")
 
+# Auth uses a Bearer token (not cookies), so wildcard origins are safe by default.
+# In production set ALLOWED_ORIGINS="https://your-app.vercel.app" (comma-separated).
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
 
 
 class Message(BaseModel):
@@ -149,6 +157,11 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[st
             break
         start += step
     return chunks
+
+
+def owned(user_id: str, filename: str) -> dict:
+    """Chroma filter: this user's chunks for one file."""
+    return {"$and": [{"user_id": user_id}, {"source": filename}]}
 
 
 RETRYABLE = (
@@ -288,7 +301,10 @@ def ocr_pdf_with_gemini(contents: bytes) -> str:
 
 def extract_pdf_text(contents: bytes) -> str:
     """Extract embedded text and OCR only pages that contain no selectable text."""
+    from PIL import Image
+
     text_pages: list[str] = []
+    document = None
     try:
         document = fitz.open(stream=contents, filetype="pdf")
         if document.needs_pass:
@@ -301,24 +317,24 @@ def extract_pdf_text(contents: bytes) -> str:
 
             # Render at 200 DPI for a useful balance of OCR accuracy and speed.
             pixmap = page.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72), alpha=False)
-            from PIL import Image
-
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
             page_text = pytesseract.image_to_string(image).strip()
-            text_pages.append(page_text)
+            if page_text:
+                text_pages.append(page_text)
             logger.info("OCR page %d/%d: %d characters", page_number, len(document), len(page_text))
-        document.close()
     except HTTPException:
         raise
     except (fitz.FileDataError, fitz.EmptyFileError) as exc:
         raise HTTPException(400, f"Could not read PDF: {exc}") from exc
     except pytesseract.TesseractNotFoundError:
-        document.close()
         logger.warning("Tesseract is unavailable; falling back to Gemini PDF transcription")
         return ocr_pdf_with_gemini(contents)
     except Exception as exc:
         logger.exception("PDF text extraction or OCR failed")
         raise HTTPException(422, f"Could not extract text from PDF: {exc}") from exc
+    finally:
+        if document is not None:
+            document.close()
     return "\n".join(text_pages)
 
 
@@ -331,10 +347,11 @@ def health():
 
 
 @app.post("/upload")
-def upload(file: UploadFile = File(...)):
-    # Plain `def`: pypdf and the Gemini SDK are blocking, so FastAPI runs this in
+def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    # Plain `def`: PDF parsing and the Gemini SDK are blocking, so FastAPI runs this in
     # its threadpool instead of stalling the event loop.
     require_api_key()
+    user_id = str(user["id"])
 
     # 1. Validate
     filename = file.filename or ""
@@ -368,7 +385,7 @@ def upload(file: UploadFile = File(...)):
     embedded_at = time.perf_counter()
 
     # 5. Re-uploading a file replaces its earlier chunks instead of duplicating them
-    previous = collection.get(where={"source": filename}, include=[])["ids"]
+    previous = collection.get(where=owned(user_id, filename), include=[])["ids"]
     if previous:
         collection.delete(ids=previous)
 
@@ -376,7 +393,8 @@ def upload(file: UploadFile = File(...)):
         ids=[str(uuid.uuid4()) for _ in chunks],
         embeddings=embeddings,
         documents=chunks,
-        metadatas=[{"source": filename, "chunk_index": i} for i in range(len(chunks))],
+        metadatas=[{"source": filename, "chunk_index": i, "user_id": user_id}
+                   for i in range(len(chunks))],
     )
 
     completed_at = time.perf_counter()
@@ -389,9 +407,9 @@ def upload(file: UploadFile = File(...)):
 
 
 @app.get("/documents")
-def get_documents():
-    """List all documents and their chunk counts."""
-    results = collection.get(include=["metadatas"])
+def get_documents(user: dict = Depends(get_current_user)):
+    """List the logged-in user's documents and their chunk counts."""
+    results = collection.get(where={"user_id": str(user["id"])}, include=["metadatas"])
     metadatas = results["metadatas"] or []
     docs = {}
     for meta in metadatas:
@@ -401,9 +419,9 @@ def get_documents():
 
 
 @app.delete("/documents/{filename:path}")
-def delete_document(filename: str):
-    """Remove all chunks associated with `filename` from the vector store."""
-    results = collection.get(where={"source": filename}, include=[])
+def delete_document(filename: str, user: dict = Depends(get_current_user)):
+    """Remove the logged-in user's chunks for `filename` from the vector store."""
+    results = collection.get(where=owned(str(user["id"]), filename), include=[])
     if not results["ids"]:
         raise HTTPException(404, f"No document found with name '{filename}'.")
     collection.delete(ids=results["ids"])
@@ -412,7 +430,8 @@ def delete_document(filename: str):
 
 
 @app.post("/chat")
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
+    user_id = str(user["id"])
     query = request.query.strip()
     if not query:
         raise HTTPException(400, "Query must not be empty.")
@@ -420,10 +439,10 @@ def chat(request: ChatRequest):
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
 
-    # Nothing ingested yet -> no context, so don't spend an API call.
-    total = collection.count()
+    # Nothing ingested by this user yet -> no context, so don't spend an API call.
+    total = len(collection.get(where={"user_id": user_id}, include=[])["ids"])
     if total == 0:
-        return {"answer": NO_ANSWER, "sources": []}
+        return {"answer": NO_ANSWER, "sources": [], "source_files": []}
 
     # 1. Embed the query (same model + dimension as the stored chunks)
     try:
@@ -436,20 +455,25 @@ def chat(request: ChatRequest):
     results = collection.query(
         query_embeddings=[query_vector],
         n_results=min(TOP_K, total),
-        include=["documents", "distances"],
+        where={"user_id": user_id},
+        include=["documents", "distances", "metadatas"],
     )
     distances: list[float] = results["distances"][0]
     logger.info("Retrieval distances (cutoff %.2f): %s", MAX_DISTANCE, [round(d, 3) for d in distances])
-    retrieved_chunks = [
-        doc for doc, dist in zip(results["documents"][0], distances) if dist <= MAX_DISTANCE
+    relevant = [
+        (doc, meta, dist)
+        for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], distances)
+        if dist <= MAX_DISTANCE
     ]
+    retrieved_chunks = [doc for doc, _, _ in relevant]
+    source_files = sorted({(meta or {}).get("source", "unknown") for _, meta, _ in relevant})
 
     # Nothing relevant -> refuse deterministically; the LLM never gets a chance to guess.
     if not retrieved_chunks:
-        return {"answer": NO_ANSWER, "sources": []}
+        return {"answer": NO_ANSWER, "sources": [], "source_files": []}
 
     # 3. Build the strict prompt around the retrieved context
-    context_string = "\n".join(retrieved_chunks)
+    context_string = "\n\n---\n\n".join(retrieved_chunks)
     prompt = PROMPT_TEMPLATE.format(context_string=context_string, query=query)
 
     # 4. Generate
@@ -471,4 +495,4 @@ def chat(request: ChatRequest):
         logger.exception("Generation failed")
         raise to_http_error(exc, "Generation") from exc
 
-    return {"answer": answer, "sources": retrieved_chunks}
+    return {"answer": answer, "sources": retrieved_chunks, "source_files": source_files}

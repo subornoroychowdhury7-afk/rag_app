@@ -1,5 +1,7 @@
 backend/.env
 backend/venv/
 backend/chroma_db/
+backend/auth.db
+auth.db
 __pycache__/
 .DS_Store

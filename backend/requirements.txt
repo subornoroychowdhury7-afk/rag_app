@@ -1,9 +1,10 @@
-  fastapi
-  uvicorn
-  chromadb
-  google-generativeai
-  python-multipart
-  pypdf
-  python-dotenv
-  pymupdf
-  pytesseract
+fastapi
+uvicorn
+chromadb
+google-generativeai
+python-multipart
+pymupdf
+pytesseract
+pillow
+python-dotenv
+pyjwt
