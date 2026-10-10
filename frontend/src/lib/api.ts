@@ -157,6 +157,44 @@ export async function register(email: string, password: string): Promise<AuthRes
   return { token, user, access_token: token };
 }
 
+export async function sendOtp(email: string): Promise<{ message: string; dev_otp?: string; expires_in: number }> {
+  const cleanEmail = email.trim().toLowerCase();
+  return request<{ message: string; dev_otp?: string; expires_in: number }>(
+    "/auth/otp/send",
+    jsonPost({ email: cleanEmail }),
+    false,
+  );
+}
+
+export async function verifyOtp(email: string, otp: string): Promise<AuthResult> {
+  const cleanEmail = email.trim().toLowerCase();
+  const res = await request<any>(
+    "/auth/otp/verify",
+    jsonPost({ email: cleanEmail, otp: otp.trim() }),
+    false,
+  );
+  const token = res.token || res.access_token;
+  if (!token) throw new Error("OTP verification failed: No authentication token received.");
+  const user: AuthUser = res.user?.email
+    ? { id: res.user.id, email: res.user.email }
+    : { email: cleanEmail };
+  setAuthSession(token, user.email);
+  return { token, user, access_token: token };
+}
+
+export async function loginWithGoogle(credential: string): Promise<AuthResult> {
+  const res = await request<any>(
+    "/auth/google",
+    jsonPost({ credential: credential.trim() }),
+    false,
+  );
+  const token = res.token || res.access_token;
+  if (!token) throw new Error("Google sign-in failed: No authentication token received.");
+  const user: AuthUser = res.user || { email: "Google User" };
+  setAuthSession(token, user.email);
+  return { token, user, access_token: token };
+}
+
 export async function getMe(): Promise<{ user: AuthUser }> {
   try {
     const res = await request<any>("/auth/me", { method: "GET" });
