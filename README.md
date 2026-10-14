@@ -1,57 +1,130 @@
-# ⚡ Enterprise RAG Platform
+# ⚡ DocQ&A — Enterprise RAG Platform
 
-> **A production-grade Retrieval-Augmented Generation (RAG) platform with hybrid OCR ingestion, strict cosine distance gating, multi-tenant data isolation, and enhanced dual-mode email authentication.**
+<div align="center">
+
+**A production-grade document intelligence system. Upload any PDF, ask anything, get strictly grounded answers with verified citations.**
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://rag-app-blush.vercel.app)
-[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Frontend-Next.js%2016-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org)
-[![React](https://img.shields.io/badge/UI-React%2019-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![Google Gemini](https://img.shields.io/badge/AI-Gemini%202.5%20%2F%20Embedding--2-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
-[![ChromaDB](https://img.shields.io/badge/Vector%20DB-ChromaDB-FF6B6B?style=for-the-badge)](https://www.trychroma.com)
+[![Backend](https://img.shields.io/badge/API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Next.js](https://img.shields.io/badge/Next.js%2016-000000?style=for-the-badge&logo=next.js)](https://nextjs.org)
+[![Gemini](https://img.shields.io/badge/Gemini%202.5-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-FF6B6B?style=for-the-badge)](https://www.trychroma.com)
+
+</div>
 
 ---
 
-## 📌 Introduction
+## The Problem with Typical RAG Projects
 
-Most open-source RAG implementations are brittle prototypes: they fail on scanned PDFs, mix all user data into a shared vector index, hallucinate answers when documents lack context, and lack real authentication.
+Most open-source RAG demos you find online share the same fatal flaws:
 
-This platform solves those core failure modes. It is a full-stack, end-to-end document intelligence system that enables users to securely upload PDFs and query them in natural language, delivering **strictly grounded answers with verified passage citations** powered by Google Gemini and ChromaDB.
+- ❌ **Break on scanned PDFs** — naive text extraction fails on images and receipts  
+- ❌ **Hallucinate freely** — blindly inject top-*K* chunks regardless of relevance  
+- ❌ **Mix everyone's data** — one shared vector index for all users  
+- ❌ **No real auth** — hardcoded secrets or no login at all  
+- ❌ **Brittle deployment** — local-only indices that break in stateless cloud environments  
 
----
-
-## ⚡ Why & How It’s Different
-
-| Feature | Standard RAG Projects on GitHub | This Platform |
-| :--- | :--- | :--- |
-| **PDF Extraction** | Naive digital-only parsers (`pypdf`); crashes on scanned docs and image pages. | **3-Tier Resilient Ingestion:** Digital extraction with **PyMuPDF**, automatic page fallback to **Tesseract OCR (200 DPI)**, and cloud fallback to **Gemini Multimodal Vision**. |
-| **Hallucination Control** | Blindly injects top-$K$ vectors into LLM context, prompting hallucinations for missing data. | **Cosine Distance Gating:** Evaluates distance against cutoff (`MAX_DISTANCE = 0.65`). Halts immediately if irrelevant, avoiding hallucinations and saving LLM tokens. |
-| **Data Privacy** | Single shared collection where all users' data is mixed together. | **Strict Tenant Isolation:** Every document chunk is tagged with `user_id`. Queries, listings, and deletions are strictly scoped to the authenticated user. |
-| **Authentication** | None, hardcoded secrets, or dummy accounts. | **Enhanced Email Auth Suite:** Passwordless **6-digit Email OTP** (SMTP delivery, 30s backend resend cooldown, brute-force locking) and secure password login with **scrypt** hashing + 7-day JWTs. |
-| **Vector Topology** | Hardcoded local disk indices that break stateless server deployments. | **Hybrid Architecture:** Seamlessly toggles between local disk storage (`HNSW`) and cloud-native **Chroma Cloud** (`Spann`). |
-| **API Resilience** | Fails on Gemini quota spikes or transient 429/503 errors. | **Exponential Backoff:** Built-in auto-retry wrapper handling transient rate limits and network drops. |
+DocQ&A solves every one of these.
 
 ---
 
-## 🚀 Core Features
+## What Makes This Different
 
-- **Hybrid Document Ingestion & OCR:** Extracts text from both digital and scanned PDFs with automatic image OCR fallback.
-- **Strictly Grounded Chat & Citations:** Answers are derived strictly from retrieved passages, complete with expandable source citations and one-click copy.
-- **Document Lifecycle Management:** Real-time document inventory with live chunk counts, atomic deletion, and overwrite deduplication.
-- **Enhanced Email Authentication:** Dual sign-in options: instant passwordless 6-digit Email OTP with server-side spam/flood protection and traditional email/password with scrypt hashing.
-- **Modern Responsive Interface:** Clean Next.js 16 SPA featuring instant session restoration, dark/light theme toggle, and Markdown rendering.
-
----
-
-## 🛠️ Tech Stack
-
-- **Frontend:** [Next.js 16](https://nextjs.org) (App Router), [React 19](https://react.dev), [TypeScript](https://www.typescriptlang.org), [Tailwind CSS v4](https://tailwindcss.com), `react-markdown`
-- **Backend:** [FastAPI](https://fastapi.tiangolo.com), [Uvicorn](https://www.uvicorn.org), [PyMuPDF (Fitz)](https://pymupdf.readthedocs.io), [pytesseract](https://pypi.org/project/pytesseract/), [Pillow](https://python-pillow.org), `pyjwt`
-- **AI & Vector DB:** [Google Gemini 2.5 Flash](https://ai.google.dev), `gemini-embedding-2` (768-dim), [ChromaDB](https://www.trychroma.com) (Local HNSW & Cloud Spann)
-- **Database & Storage:** SQLite3 (WAL mode) with automated indexing for user accounts and OTP sessions
-- **Deployment:** [Vercel](https://vercel.com) (Frontend), [Render](https://render.com) Docker Container (Backend)
+| Problem | Standard RAG | DocQ&A |
+|:---|:---|:---|
+| **Scanned / image PDFs** | Crashes or returns blank | 3-tier ingestion: PyMuPDF → Tesseract OCR → Gemini Vision |
+| **Hallucination** | Answers even when docs don't contain the answer | Cosine distance gate (`≤ 0.65`) — refuses to answer if no relevant chunk found |
+| **Data privacy** | All users share one vector collection | Every chunk tagged with `user_id`; queries are strictly user-scoped |
+| **Authentication** | None, or dummy accounts | Passwordless 6-digit Email OTP + Password login with `scrypt` hashing + 7-day JWTs |
+| **Cloud deployment** | Breaks on stateless servers | Switches between local HNSW and Chroma Cloud automatically |
+| **API failures** | Crashes on rate limits | Exponential backoff with 4 retries on every Gemini call |
 
 ---
 
-## 📄 License
+## How It Works
 
-Distributed under the **MIT License**.
+```
+Your PDF
+   │
+   ├─ 1. EXTRACT  ─ PyMuPDF (digital) → Tesseract OCR (scanned) → Gemini Vision (fallback)
+   │
+   ├─ 2. CHUNK    ─ Overlapping 1,800-char windows (10% overlap to preserve context)
+   │
+   ├─ 3. EMBED    ─ gemini-embedding-2 → 768-dim vectors, batched in parallel
+   │
+   └─ 4. STORE    ─ ChromaDB with user_id metadata for strict tenant isolation
+
+Your Question
+   │
+   ├─ 1. EMBED    ─ Same model, retrieval_query task type
+   │
+   ├─ 2. SEARCH   ─ Cosine similarity against YOUR chunks only
+   │
+   ├─ 3. GATE     ─ Distance > 0.65? Stop. Return "I cannot answer." (no LLM call)
+   │
+   └─ 4. GENERATE ─ Gemini 2.5 Flash answers strictly from retrieved passages + citations
+```
+
+---
+
+## Core Features
+
+- **🔍 3-Tier Resilient OCR** — Handles digital PDFs, scanned documents, and image-heavy files without manual configuration
+- **🛡️ Hallucination Gate** — Hard cutoff on cosine distance. The model never guesses when documents don't contain the answer
+- **🔐 Multi-Tenant Isolation** — Each user's documents are isolated at the vector metadata level; no cross-user data leakage
+- **✉️ Dual Email Auth** — Passwordless OTP (with 30s server-side resend cooldown, 5-attempt brute-force lockout) + traditional password with `scrypt`
+- **🔄 Hybrid Vector Backend** — Local ChromaDB for development, Chroma Cloud for stateless production — zero code change required
+- **📑 Source Citations** — Every answer includes the exact passage it was derived from, expandable inline
+
+---
+
+## Tech Stack
+
+```
+Frontend        Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4
+Backend         FastAPI · Uvicorn · PyMuPDF · Tesseract OCR · Pillow
+AI & Vectors    Gemini 2.5 Flash · gemini-embedding-2 (768-dim) · ChromaDB
+Auth & Storage  PyJWT (HS256) · scrypt · SQLite 3 (WAL mode)
+Deployment      Vercel (frontend) · Render Docker (backend)
+```
+
+---
+
+## Local Setup
+
+```bash
+# Backend
+cd backend
+python -m venv venv && venv\Scripts\activate    # Windows
+pip install -r requirements.txt
+cp .env.example .env                            # Add GEMINI_API_KEY
+uvicorn main:app --reload
+
+# Frontend
+cd frontend
+npm install
+npm run dev                                     # http://localhost:3000
+```
+
+**Minimum required env vars:**
+```
+GEMINI_API_KEY=...        # Required for embeddings + generation
+JWT_SECRET=...            # Any long random string
+```
+SMTP vars are optional — without them, OTP codes are printed to the backend console for local development.
+
+---
+
+## Deployment
+
+| Service | Config |
+|:---|:---|
+| **Vercel** | Auto-deploys frontend on push to `main`. Set `NEXT_PUBLIC_API_URL` env var to your Render URL. |
+| **Render** | Uses `render.yaml` + `backend/Dockerfile`. Set `GEMINI_API_KEY`, `JWT_SECRET`, and SMTP vars in Render dashboard. |
+
+---
+
+## License
+
+MIT
