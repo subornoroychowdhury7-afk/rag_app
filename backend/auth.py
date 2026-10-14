@@ -1,15 +1,14 @@
-"""Account system: register / login / Google OAuth / Email OTP / me.
+"""Account system: register / login / Email OTP / me.
 
 Supports:
 - Email + password with scrypt hashing
-- Google OAuth credential verification (via google-auth & Google API)
-- Email 6-digit OTP login with SMTP delivery and dev fallback
-- JWT sessions with 7-day TTL
+- Passwordless 6-digit Email OTP login with SMTP delivery and dev fallback
+- Server-side rate limiting and resend cooldown enforcement
+- JWT sessions with 7-day TTL and constant-time comparisons
 """
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import re
@@ -18,8 +17,6 @@ import smtplib
 import sqlite3
 import threading
 import time
-import urllib.error
-import urllib.request
 from contextlib import closing
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -28,8 +25,6 @@ from typing import Optional
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token
 from pydantic import BaseModel
 
 logger = logging.getLogger("rag.auth")
@@ -38,13 +33,14 @@ AUTH_DB_PATH = (os.getenv("AUTH_DB_PATH") or "./auth.db").strip()
 TOKEN_TTL_SECONDS = int((os.getenv("TOKEN_TTL_HOURS") or "168").strip()) * 3600  # 7 days
 MIN_PASSWORD_LEN = 8
 MAX_PASSWORD_LEN = 128
+OTP_TTL_SECONDS = 600  # 10 minutes
+OTP_RESEND_COOLDOWN = 30  # 30 seconds minimum between sends per email
+MAX_OTP_ATTEMPTS = 5
 
 JWT_SECRET = (os.getenv("JWT_SECRET") or os.getenv("AUTH_SECRET") or "").strip()
 if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
     logger.warning("JWT_SECRET is not set - using a temporary secret.")
-
-GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or os.getenv("NEXT_PUBLIC_GOOGLE_CLIENT_ID") or "").strip()
 
 # SMTP Configuration
 SMTP_HOST = (os.getenv("SMTP_HOST") or "").strip()
@@ -54,14 +50,13 @@ SMTP_PASSWORD = (os.getenv("SMTP_PASSWORD") or "").strip()
 SMTP_FROM = (os.getenv("SMTP_FROM") or SMTP_USER or "noreply@docqa.app").strip()
 SMTP_CONFIGURED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-OTP_TTL_SECONDS = 600  # 10 minutes
+EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 # scrypt parameters
 _N, _R, _P = 2 ** 14, 8, 1
 
 # --------------------------------------------------------------------------- #
-# Storage
+# Storage & Database Migration
 # --------------------------------------------------------------------------- #
 _db_lock = threading.Lock()
 
@@ -71,6 +66,7 @@ def _connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
     return conn
@@ -95,19 +91,37 @@ def init_db() -> None:
                    otp_code TEXT NOT NULL,
                    expires_at REAL NOT NULL,
                    attempts INTEGER DEFAULT 0,
-                   created_at REAL NOT NULL
+                   created_at REAL NOT NULL,
+                   last_sent_at REAL DEFAULT 0
                )"""
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_otps_expires ON email_otps(expires_at);")
+
+        # Handle backward-compatible migration for last_sent_at column
+        try:
+            conn.execute("ALTER TABLE email_otps ADD COLUMN last_sent_at REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 init_db()
 
+
+def _cleanup_expired_otps(conn: sqlite3.Connection) -> None:
+    """Purge stale OTP records opportunistically."""
+    try:
+        conn.execute("DELETE FROM email_otps WHERE expires_at < ?", (time.time(),))
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- #
-# Password hashing
+# Password Hashing & Constant-time Verification
 # --------------------------------------------------------------------------- #
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=_N, r=_R, p=_P, dklen=32)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=_N, r=_R, p=_P, dklen=32)
     return f"scrypt${_N}${_R}${_P}${salt.hex()}${digest.hex()}"
 
 
@@ -116,7 +130,7 @@ def verify_password(password: str, stored: str) -> bool:
         if stored.startswith("scrypt$"):
             _, n, r, p, salt_hex, digest_hex = stored.split("$")
             digest = hashlib.scrypt(
-                password.encode(),
+                password.encode("utf-8"),
                 salt=bytes.fromhex(salt_hex),
                 n=int(n),
                 r=int(r),
@@ -127,7 +141,7 @@ def verify_password(password: str, stored: str) -> bool:
         if "$" in stored:
             parts = stored.split("$")
             salt_bytes = bytes.fromhex(parts[-2])
-            digest = hashlib.sha256(salt_bytes + password.encode()).hexdigest()
+            digest = hashlib.sha256(salt_bytes + password.encode("utf-8")).hexdigest()
             return hmac.compare_digest(digest, parts[-1])
         return False
     except Exception:
@@ -137,9 +151,9 @@ def verify_password(password: str, stored: str) -> bool:
 _DUMMY_HASH = hash_password(secrets.token_urlsafe(16))
 
 # --------------------------------------------------------------------------- #
-# Throttling
+# Throttling & Rate Limiting
 # --------------------------------------------------------------------------- #
-_FAIL_LIMIT, _FAIL_WINDOW = 20, 15 * 60
+_FAIL_LIMIT, _FAIL_WINDOW = 15, 15 * 60  # 15 failures per 15 minutes
 _failures: dict[str, list[float]] = {}
 _fail_lock = threading.Lock()
 
@@ -181,7 +195,13 @@ def _clear_failures(key: str) -> None:
 def create_token(user_id: int | str, email: str) -> str:
     now = int(time.time())
     return jwt.encode(
-        {"sub": str(user_id), "email": email, "iat": now, "exp": now + TOKEN_TTL_SECONDS},
+        {
+            "sub": str(user_id),
+            "email": email,
+            "iss": "docqa-api",
+            "iat": now,
+            "exp": now + TOKEN_TTL_SECONDS,
+        },
         JWT_SECRET,
         algorithm="HS256",
     )
@@ -256,15 +276,27 @@ def send_otp_email(recipient: str, otp_code: str) -> bool:
         msg["From"] = f"DocQ&A <{SMTP_FROM}>"
         msg["To"] = recipient
 
-        text_content = f"Your verification code is: {otp_code}\n\nThis code will expire in 10 minutes.\nIf you did not request this, please ignore this email."
+        text_content = (
+            f"Hello,\n\n"
+            f"Your verification code for DocQ&A is: {otp_code}\n\n"
+            f"This code will expire in 10 minutes.\n"
+            f"If you did not request this verification code, please ignore this email.\n\n"
+            f"— The DocQ&A Team"
+        )
+
         html_content = f"""
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0;">
-          <h2 style="color: #4f46e5; margin: 0 0 16px; font-size: 24px; font-weight: 700;">DocQ&amp;A</h2>
-          <p style="color: #334155; font-size: 15px; line-height: 1.5; margin: 0 0 20px;">Use the verification code below to sign in to your DocQ&amp;A account:</p>
-          <div style="background: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 18px; text-align: center; margin: 0 0 24px;">
-            <span style="font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #1e1b4b; font-family: monospace;">{otp_code}</span>
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 36px 28px; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+          <div style="margin-bottom: 24px;">
+            <span style="font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #4f46e5, #7c3aed); -webkit-background-clip: text; color: #4f46e5; letter-spacing: -0.5px;">⚡ DocQ&amp;A</span>
           </div>
-          <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 0;">This code is valid for 10 minutes. If you did not request this code, no action is required.</p>
+          <h2 style="color: #0f172a; margin: 0 0 12px; font-size: 20px; font-weight: 700;">Sign in to your account</h2>
+          <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">Use the 6-digit one-time code below to verify your email and sign in:</p>
+          <div style="background: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 24px;">
+            <span style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #1e1b4b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">{otp_code}</span>
+          </div>
+          <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 0 0 16px;">This code is valid for <strong>10 minutes</strong>. For your security, never share this code with anyone.</p>
+          <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+          <p style="color: #94a3b8; font-size: 12px; margin: 0;">If you did not request this email, you can safely disregard it.</p>
         </div>
         """
         msg.attach(MIMEText(text_content, "plain"))
@@ -288,7 +320,7 @@ def send_otp_email(recipient: str, otp_code: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Routes
+# Routes & Models
 # --------------------------------------------------------------------------- #
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -307,11 +339,6 @@ class OtpVerifyRequest(BaseModel):
     otp: str
 
 
-class GoogleAuthRequest(BaseModel):
-    credential: Optional[str] = None
-    email: Optional[str] = None
-
-
 def _normalize_email(email: str) -> str:
     email = email.strip().lower()
     if len(email) > 254 or not EMAIL_RE.match(email):
@@ -323,6 +350,9 @@ def _normalize_email(email: str) -> str:
 @router.post("/register")
 def register(body: Credentials, request: Request):
     email = _normalize_email(body.email)
+    key = _throttle_key(email, request)
+    _check_throttle(key)
+
     if len(body.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters.")
     if len(body.password) > MAX_PASSWORD_LEN:
@@ -337,8 +367,10 @@ def register(body: Credentials, request: Request):
             )
             user_id = cursor.lastrowid
     except sqlite3.IntegrityError:
+        _record_failure(key)
         raise HTTPException(409, "An account with this email already exists. Try logging in.") from None
 
+    _clear_failures(key)
     token = create_token(user_id, email)
     return {
         "token": token,
@@ -385,20 +417,39 @@ def send_otp(body: OtpSendRequest, request: Request):
     key = _throttle_key(f"otp:{email}", request)
     _check_throttle(key)
 
-    # 6-digit numeric OTP code
-    otp_code = f"{secrets.randbelow(1000000):06d}"
-    expires_at = time.time() + OTP_TTL_SECONDS
+    now = time.time()
 
     with _db_lock, closing(_connect()) as conn, conn:
+        _cleanup_expired_otps(conn)
+
+        # Check resend cooldown
+        existing = conn.execute(
+            "SELECT last_sent_at, expires_at FROM email_otps WHERE email = ?", (email,)
+        ).fetchone()
+
+        if existing:
+            last_sent = existing["last_sent_at"] or 0
+            elapsed = now - last_sent
+            if elapsed < OTP_RESEND_COOLDOWN:
+                remaining = int(OTP_RESEND_COOLDOWN - elapsed)
+                raise HTTPException(
+                    429, f"Please wait {remaining} seconds before requesting a new code."
+                )
+
+        # 6-digit numeric OTP code
+        otp_code = f"{secrets.randbelow(1000000):06d}"
+        expires_at = now + OTP_TTL_SECONDS
+
         conn.execute(
-            """INSERT INTO email_otps (email, otp_code, expires_at, attempts, created_at)
-               VALUES (?, ?, ?, 0, ?)
+            """INSERT INTO email_otps (email, otp_code, expires_at, attempts, created_at, last_sent_at)
+               VALUES (?, ?, ?, 0, ?, ?)
                ON CONFLICT(email) DO UPDATE SET
                    otp_code = excluded.otp_code,
                    expires_at = excluded.expires_at,
                    attempts = 0,
-                   created_at = excluded.created_at""",
-            (email, otp_code, expires_at, time.time()),
+                   created_at = excluded.created_at,
+                   last_sent_at = excluded.last_sent_at""",
+            (email, otp_code, expires_at, now, now),
         )
 
     sent_smtp = send_otp_email(email, otp_code)
@@ -417,6 +468,9 @@ def verify_otp(body: OtpVerifyRequest, request: Request):
     key = _throttle_key(f"otp:{email}", request)
     _check_throttle(key)
 
+    if not code:
+        raise HTTPException(400, "Please enter the verification code.")
+
     with _db_lock, closing(_connect()) as conn, conn:
         row = conn.execute(
             "SELECT otp_code, expires_at, attempts FROM email_otps WHERE email = ?",
@@ -424,13 +478,13 @@ def verify_otp(body: OtpVerifyRequest, request: Request):
         ).fetchone()
 
         if row is None:
-            raise HTTPException(400, "No verification code requested for this email. Request a new code.")
+            raise HTTPException(400, "No verification code requested for this email. Please request a new code.")
 
         if time.time() > row["expires_at"]:
             conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
             raise HTTPException(400, "Verification code has expired. Please request a new one.")
 
-        if row["attempts"] >= 5:
+        if row["attempts"] >= MAX_OTP_ATTEMPTS:
             conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
             _record_failure(key)
             raise HTTPException(429, "Too many incorrect attempts. Please request a new code.")
@@ -438,67 +492,21 @@ def verify_otp(body: OtpVerifyRequest, request: Request):
         if not hmac.compare_digest(row["otp_code"], code):
             conn.execute("UPDATE email_otps SET attempts = attempts + 1 WHERE email = ?", (email,))
             _record_failure(key)
-            raise HTTPException(400, "Incorrect verification code. Please check and try again.")
+            attempts_left = MAX_OTP_ATTEMPTS - (row["attempts"] + 1)
+            raise HTTPException(
+                400,
+                f"Incorrect verification code. ({attempts_left} attempts remaining)"
+                if attempts_left > 0
+                else "Incorrect verification code.",
+            )
 
-        # OTP verified: delete it immediately to prevent reuse
+        # OTP verified: delete it immediately to prevent replay attacks
         conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
 
     _clear_failures(key)
     user = _get_or_create_user(email)
     token = create_token(user["id"], user["email"])
     logger.info("User authenticated via OTP: %s", email)
-
-    return {
-        "token": token,
-        "access_token": token,
-        "token_type": "bearer",
-        "expires_in": TOKEN_TTL_SECONDS,
-        "user": user,
-    }
-
-
-# Google OAuth Token Verification & Login
-@router.post("/google")
-def google_auth(body: GoogleAuthRequest):
-    credential = (body.credential or "").strip()
-    email: Optional[str] = None
-
-    if credential:
-        # 1. Try offline verification using google-auth library
-        try:
-            req = google_requests.Request()
-            id_info = id_token.verify_oauth2_token(
-                credential,
-                req,
-                audience=GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID else None,
-            )
-            email = id_info.get("email")
-        except Exception as exc:
-            logger.warning("Offline Google verification failed (%s); trying Google tokeninfo endpoint...", exc)
-
-        # 2. Fallback to Google's tokeninfo API
-        if not email:
-            try:
-                url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
-                with urllib.request.urlopen(url, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    if GOOGLE_CLIENT_ID and data.get("aud") != GOOGLE_CLIENT_ID:
-                        raise HTTPException(401, "Google token audience mismatch.")
-                    email = data.get("email")
-            except Exception as exc:
-                logger.warning("Online Google token verification failed: %s", exc)
-
-    # 3. Direct/Fallback sign-in if client-id is not yet configured in GCP
-    if not email and body.email:
-        email = body.email.strip().lower()
-
-    if not email:
-        raise HTTPException(400, "Please provide a Google credential or email address.")
-
-    email = _normalize_email(email)
-    user = _get_or_create_user(email)
-    token = create_token(user["id"], user["email"])
-    logger.info("User authenticated via Google: %s", email)
 
     return {
         "token": token,
