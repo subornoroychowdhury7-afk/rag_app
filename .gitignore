@@ -1,15 +1,25 @@
+# Backend
 backend/.env
 backend/venv/
 backend/chroma_db/
 backend/auth.db
+
+# Database files
 auth.db
 auth.sqlite3*
 *.db
 *.sqlite3
-__pycache__/
-.DS_Store
-.env.local
-.vercel
 
-.vercel
+# Local vector database
+chroma_db/
+
+# Python cache
+__pycache__/
+
+# OS
+.DS_Store
+
+# Environment & Vercel
+.env.local
 .env*
+.vercel
