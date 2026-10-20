@@ -286,7 +286,7 @@ def _send_via_resend(api_key: str, from_addr: str, to_addr: str, subject: str, h
             "Content-Type": "application/json",
             "User-Agent": "DocQA-Auth/1.0",
         }
-        sender = from_addr if ("@" in from_addr and not from_addr.endswith("@docqa.app")) else "DocQ&A <onboarding@resend.dev>"
+        sender = from_addr if ("@" in from_addr and not any(from_addr.lower().endswith(d) for d in ["@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com", "@docqa.app"])) else "DocQ&A <onboarding@resend.dev>"
         payload = {
             "from": sender,
             "to": [to_addr],
@@ -379,7 +379,11 @@ def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
         or ""
     ).strip().strip('"').strip("'")
     if raw_resend:
-        from_email = (os.getenv("RESEND_FROM") or os.getenv("SMTP_FROM") or "DocQ&A <onboarding@resend.dev>").strip().strip('"').strip("'")
+        custom_from = (os.getenv("RESEND_FROM") or "").strip().strip('"').strip("'")
+        if custom_from and not any(custom_from.lower().endswith(d) for d in ["@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com"]):
+            from_email = custom_from
+        else:
+            from_email = "DocQ&A <onboarding@resend.dev>"
         return _send_via_resend(raw_resend, from_email, recipient, subject, html_content, text_content)
 
     # 2. Brevo HTTPS API (Port 443)
