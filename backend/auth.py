@@ -9,6 +9,7 @@ Supports:
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
@@ -17,6 +18,8 @@ import smtplib
 import sqlite3
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import closing
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -273,49 +276,125 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
 
 
 # --------------------------------------------------------------------------- #
-# Email Dispatcher
+# Email Dispatcher (HTTPS REST API + SMTP Fallback)
 # --------------------------------------------------------------------------- #
+def _send_via_resend(api_key: str, from_addr: str, to_addr: str, subject: str, html: str, text: str) -> tuple[bool, Optional[str]]:
+    try:
+        url = "https://api.resend.com/emails"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "DocQA-Auth/1.0",
+        }
+        sender = from_addr if ("@" in from_addr and not from_addr.endswith("@docqa.app")) else "DocQ&A <onboarding@resend.dev>"
+        payload = {
+            "from": sender,
+            "to": [to_addr],
+            "subject": subject,
+            "html": html,
+            "text": text,
+        }
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            if resp.status in (200, 201):
+                logger.info("Sent OTP email via Resend to %s", to_addr)
+                return True, None
+            return False, f"Resend API returned status {resp.status}"
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        logger.exception("Resend API error: %s - %s", exc.code, err_body)
+        return False, f"Resend API error ({exc.code}): {err_body}"
+    except Exception as exc:
+        logger.exception("Resend failed: %s", exc)
+        return False, f"Resend delivery error: {str(exc)}"
+
+
+def _send_via_brevo(api_key: str, from_addr: str, to_addr: str, subject: str, html: str, text: str) -> tuple[bool, Optional[str]]:
+    try:
+        url = "https://api.brevo.com/v3/smtp/email"
+        headers = {
+            "api-key": api_key,
+            "Content-Type": "application/json",
+            "User-Agent": "DocQA-Auth/1.0",
+        }
+        sender_email = from_addr if "@" in from_addr else "noreply@docqa.app"
+        payload = {
+            "sender": {"name": "DocQ&A", "email": sender_email},
+            "to": [{"email": to_addr}],
+            "subject": subject,
+            "htmlContent": html,
+            "textContent": text,
+        }
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            if resp.status in (200, 201):
+                logger.info("Sent OTP email via Brevo to %s", to_addr)
+                return True, None
+            return False, f"Brevo API returned status {resp.status}"
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        logger.exception("Brevo API error: %s - %s", exc.code, err_body)
+        return False, f"Brevo API error ({exc.code}): {err_body}"
+    except Exception as exc:
+        logger.exception("Brevo failed: %s", exc)
+        return False, f"Brevo delivery error: {str(exc)}"
+
+
 def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
-    """Send OTP code via SMTP if configured. Return (True, None) or (False, error_reason)."""
-    cfg = get_smtp_config()
+    """Send OTP code via HTTPS API (Resend/Brevo) or SMTP fallback."""
     logger.info("--------------------------------------------------")
     logger.info(">>> [OTP VERIFICATION CODE for %s]: %s <<<", recipient, otp_code)
     logger.info("--------------------------------------------------")
 
+    subject = f"Your DocQ&A Verification Code: {otp_code}"
+    text_content = (
+        f"Hello,\n\n"
+        f"Your verification code for DocQ&A is: {otp_code}\n\n"
+        f"This code will expire in 10 minutes.\n"
+        f"If you did not request this verification code, please ignore this email.\n\n"
+        f"— The DocQ&A Team"
+    )
+
+    html_content = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 36px 28px; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+      <div style="margin-bottom: 24px;">
+        <span style="font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #4f46e5, #7c3aed); -webkit-background-clip: text; color: #4f46e5; letter-spacing: -0.5px;">⚡ DocQ&amp;A</span>
+      </div>
+      <h2 style="color: #0f172a; margin: 0 0 12px; font-size: 20px; font-weight: 700;">Sign in to your account</h2>
+      <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">Use the 6-digit one-time code below to verify your email and sign in:</p>
+      <div style="background: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 24px;">
+        <span style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #1e1b4b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">{otp_code}</span>
+      </div>
+      <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 0 0 16px;">This code is valid for <strong>10 minutes</strong>. For your security, never share this code with anyone.</p>
+      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+      <p style="color: #94a3b8; font-size: 12px; margin: 0;">If you did not request this email, you can safely disregard it.</p>
+    </div>
+    """
+
+    # 1. Resend HTTPS API (Port 443 - works on Render free tier!)
+    resend_key = (os.getenv("RESEND_API_KEY") or "").strip()
+    if resend_key:
+        from_email = (os.getenv("RESEND_FROM") or os.getenv("SMTP_FROM") or "DocQ&A <onboarding@resend.dev>").strip()
+        return _send_via_resend(resend_key, from_email, recipient, subject, html_content, text_content)
+
+    # 2. Brevo HTTPS API (Port 443)
+    brevo_key = (os.getenv("BREVO_API_KEY") or "").strip()
+    if brevo_key:
+        from_email = (os.getenv("BREVO_FROM") or os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "noreply@docqa.app").strip()
+        return _send_via_brevo(brevo_key, from_email, recipient, subject, html_content, text_content)
+
+    # 3. Standard SMTP fallback (Requires outbound port 587/465 access)
+    cfg = get_smtp_config()
     if not cfg["is_configured"]:
         missing_vars = ", ".join(cfg["missing"])
-        logger.warning("SMTP not configured. Missing variables: %s", missing_vars)
-        return False, f"Missing SMTP environment variables: {missing_vars}"
+        logger.warning("No email provider configured. Missing variables: %s", missing_vars)
+        return False, f"Missing email credentials. Please configure RESEND_API_KEY (recommended for Render free tier) or SMTP settings ({missing_vars})."
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Your DocQ&A Verification Code: {otp_code}"
+        msg["Subject"] = subject
         msg["From"] = f"DocQ&A <{cfg['from']}>"
         msg["To"] = recipient
-
-        text_content = (
-            f"Hello,\n\n"
-            f"Your verification code for DocQ&A is: {otp_code}\n\n"
-            f"This code will expire in 10 minutes.\n"
-            f"If you did not request this verification code, please ignore this email.\n\n"
-            f"— The DocQ&A Team"
-        )
-
-        html_content = f"""
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 36px 28px; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
-          <div style="margin-bottom: 24px;">
-            <span style="font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #4f46e5, #7c3aed); -webkit-background-clip: text; color: #4f46e5; letter-spacing: -0.5px;">⚡ DocQ&amp;A</span>
-          </div>
-          <h2 style="color: #0f172a; margin: 0 0 12px; font-size: 20px; font-weight: 700;">Sign in to your account</h2>
-          <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">Use the 6-digit one-time code below to verify your email and sign in:</p>
-          <div style="background: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 24px;">
-            <span style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #1e1b4b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">{otp_code}</span>
-          </div>
-          <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 0 0 16px;">This code is valid for <strong>10 minutes</strong>. For your security, never share this code with anyone.</p>
-          <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
-          <p style="color: #94a3b8; font-size: 12px; margin: 0;">If you did not request this email, you can safely disregard it.</p>
-        </div>
-        """
         msg.attach(MIMEText(text_content, "plain"))
         msg.attach(MIMEText(html_content, "html"))
 
@@ -334,6 +413,12 @@ def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
     except smtplib.SMTPAuthenticationError as exc:
         logger.exception("SMTP authentication failed for %s: %s", recipient, exc)
         return False, "SMTP authentication failed. Please verify your Gmail address and 16-character App Password."
+    except OSError as exc:
+        logger.exception("Network error sending OTP email to %s: %s", recipient, exc)
+        # Render Free Tier blocks outbound SMTP ports 25, 465, 587
+        if "101" in str(exc) or "unreachable" in str(exc).lower():
+            return False, "Render free tier blocks standard SMTP ports (587/465). To send emails for free on Render, please add RESEND_API_KEY (free from resend.com) to your Render Environment variables."
+        return False, f"SMTP network error: {str(exc)}"
     except Exception as exc:
         logger.exception("Failed to deliver OTP email via SMTP to %s: %s", recipient, exc)
         return False, f"Email delivery error ({type(exc).__name__}): {str(exc)}"
