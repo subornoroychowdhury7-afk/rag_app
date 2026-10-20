@@ -9,7 +9,7 @@ type AuthMethod = "otp" | "password" | "register";
 const MIN_PASSWORD = 8;
 
 const inputClass =
-  "w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-800 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:placeholder:text-slate-500";
+  "w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500";
 
 export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => void }) {
   const [method, setMethod] = useState<AuthMethod>("otp");
@@ -138,49 +138,73 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 py-10 dark:bg-slate-950">
-      <div className="w-full max-w-sm animate-fade-in-up">
-        {/* Header Branding */}
-        <div className="mb-6 flex flex-col items-center text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+    <main className="min-h-dvh bg-white dark:bg-slate-950 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(460px,0.82fr)]">
+      <section className="relative hidden min-h-dvh overflow-hidden bg-[#11152b] px-12 py-10 text-white lg:flex lg:flex-col lg:justify-between xl:px-20">
+        <div className="absolute -right-32 -top-32 h-[34rem] w-[34rem] rounded-full bg-indigo-500/20 blur-3xl" />
+        <div className="absolute -bottom-48 -left-32 h-[34rem] w-[34rem] rounded-full bg-violet-500/15 blur-3xl" />
+        <div className="relative flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500 shadow-lg shadow-indigo-950/30">
             <svg
-              className="h-7 w-7 text-white"
+              className="h-5 w-5 text-white"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
-              strokeWidth={1.8}
+              strokeWidth={2}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7 3.75h7l4.25 4.5v12A1.75 1.75 0 0116.5 22h-9A1.75 1.75 0 015.75 20.25v-14A2.5 2.5 0 018.25 3.75M14 4v4.5h4M9 13h6M9 16.5h6" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            {method === "register"
-              ? "Create your account"
-              : method === "otp"
-                ? "Sign in with Email Code"
-                : "Welcome back"}
+          <span className="text-lg font-semibold tracking-tight">DocQ&amp;A</span>
+        </div>
+
+        <div className="relative my-14 max-w-xl xl:ml-12">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-3.5 py-2 text-xs font-medium text-indigo-100">
+            <span className="h-2 w-2 rounded-full bg-emerald-400" /> Your knowledge, in one place
+          </div>
+          <h2 className="text-4xl font-semibold leading-[1.12] tracking-tight xl:text-5xl">Your documents have answers.</h2>
+          <p className="mt-5 max-w-md text-base leading-7 text-slate-300">Bring your files together and get to the information you need with a simple conversation.</p>
+
+          <div className="mt-12 rounded-2xl border border-white/10 bg-white/[0.07] p-5 shadow-2xl shadow-black/20 backdrop-blur-sm">
+            <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-400/15 text-indigo-200">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M7 3.75h7l4.25 4.5v12A1.75 1.75 0 0116.5 22h-9A1.75 1.75 0 015.75 20.25v-14A2.5 2.5 0 018.25 3.75M14 4v4.5h4M9 13h6M9 16.5h4" /></svg>
+              </div>
+              <div><p className="text-sm font-medium">Project overview.pdf</p><p className="mt-0.5 text-xs text-slate-400">Ready to explore</p></div>
+              <span className="ml-auto rounded-full bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">Added</span>
+            </div>
+            <div className="mt-4 max-w-[90%] rounded-xl rounded-tl-sm bg-white/10 px-4 py-3 text-sm leading-6 text-slate-200">What are the key milestones in this document?</div>
+            <div className="ml-auto mt-3 max-w-[90%] rounded-xl rounded-tr-sm bg-indigo-500/25 px-4 py-3 text-sm leading-6 text-indigo-50">I found three key milestones. The first is the initial project review…</div>
+            <p className="mt-3 text-right text-[11px] text-slate-400">A clearer way to work with your files</p>
+          </div>
+        </div>
+        <p className="relative text-xs text-slate-400">Private access to your documents, whenever you need it.</p>
+      </section>
+
+      <section className="flex min-h-dvh flex-col px-5 py-6 sm:px-10 lg:justify-center lg:px-14 xl:px-24">
+       <div className="mx-auto w-full max-w-md animate-fade-in-up">
+        <div className="mb-10 flex items-center gap-3 lg:hidden">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-md shadow-indigo-600/20">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 3.75h7l4.25 4.5v12A1.75 1.75 0 0116.5 22h-9A1.75 1.75 0 015.75 20.25v-14A2.5 2.5 0 018.25 3.75M14 4v4.5h4M9 13h6M9 16.5h6" /></svg>
+          </div><span className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">DocQ&amp;A</span>
+        </div>
+        <div className="mb-7">
+          <p className="mb-2 text-sm font-medium text-indigo-600 dark:text-indigo-400">{method === "register" ? "Get started" : "Welcome back"}</p>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">
+            {method === "register" ? "Create your account" : "Sign in to DocQ&A"}
           </h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {method === "register"
-              ? "Your documents stay private to your account."
-              : method === "otp"
-                ? "Passwordless sign-in with a 6-digit one-time code."
-                : "Log in with your password to access your documents."}
+          <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+            {method === "register" ? "Create an account to keep your documents in one place." : "Enter your details to access your documents."}
           </p>
         </div>
 
         {/* Method Switcher Tabs */}
-        <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl bg-slate-200/80 p-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+        <div className="mb-5 grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" role="tablist" aria-label="Sign in method">
           <button
             type="button"
             onClick={() => switchMethod("otp")}
             className={`rounded-lg py-1.5 transition-all ${
               method === "otp"
-                ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-white"
+              ? "bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-white"
                 : "hover:text-slate-900 dark:hover:text-white"
             }`}
           >
@@ -191,7 +215,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
             onClick={() => switchMethod("password")}
             className={`rounded-lg py-1.5 transition-all ${
               method === "password"
-                ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-white"
+              ? "bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-white"
                 : "hover:text-slate-900 dark:hover:text-white"
             }`}
           >
@@ -202,7 +226,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
             onClick={() => switchMethod("register")}
             className={`rounded-lg py-1.5 transition-all ${
               method === "register"
-                ? "bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-white"
+              ? "bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-white"
                 : "hover:text-slate-900 dark:hover:text-white"
             }`}
           >
@@ -210,7 +234,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
           </button>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_12px_42px_-22px_rgba(15,23,42,0.22)] sm:p-8 dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
           {/* Method 1: OTP Login */}
           {method === "otp" && (
             <div>
@@ -240,7 +264,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
                   <button
                     type="submit"
                     disabled={busy || !email.trim()}
-                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {busy && <Spinner className="h-4 w-4" />}
                     {busy ? "Sending code…" : "Send verification code"}
@@ -290,7 +314,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
                   <button
                     type="submit"
                     disabled={busy || otpCode.length < 6}
-                    className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {busy && <Spinner className="h-4 w-4" />}
                     {busy ? "Verifying…" : "Verify and sign in"}
@@ -394,7 +418,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
               <button
                 type="submit"
                 disabled={busy}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy && <Spinner className="h-4 w-4" />}
                 {busy
@@ -433,7 +457,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
               <button
                 type="button"
                 onClick={() => switchMethod("otp")}
-                className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                className="font-medium text-indigo-700 hover:underline dark:text-indigo-400"
               >
                 Sign in
               </button>
@@ -444,7 +468,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
               <button
                 type="button"
                 onClick={() => switchMethod("register")}
-                className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                className="font-medium text-indigo-700 hover:underline dark:text-indigo-400"
               >
                 Create an account
               </button>
@@ -452,6 +476,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
           )}
         </p>
       </div>
-    </main>
-  );
+    </section>
+  </main>
+);
 }
