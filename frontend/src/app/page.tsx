@@ -6,6 +6,7 @@ import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import Sidebar, { type Doc } from "@/components/Sidebar";
 import Spinner from "@/components/Spinner";
+import SummaryModal from "@/components/SummaryModal";
 import {
   AUTH_EXPIRED_EVENT,
   getDocuments,
@@ -23,6 +24,10 @@ export default function Home() {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+
+  // Cool new features state:
+  const [selectedDocFilter, setSelectedDocFilter] = useState<string | null>(null);
+  const [summaryDocFilename, setSummaryDocFilename] = useState<string | null>(null);
 
   /* ---- Restore saved session on first load ---- */
   useEffect(() => {
@@ -62,6 +67,8 @@ export default function Home() {
       if (!token) {
         setUser(null);
         setDocs([]);
+        setSelectedDocFilter(null);
+        setSummaryDocFilename(null);
         setSidebarOpen(false);
       } else {
         const u = getUserFromToken(token);
@@ -118,6 +125,8 @@ export default function Home() {
     logout();
     setUser(null);
     setDocs([]);
+    setSelectedDocFilter(null);
+    setSummaryDocFilename(null);
     setSidebarOpen(false);
   }
 
@@ -128,6 +137,12 @@ export default function Home() {
 
   function handleDeleted(name: string) {
     setDocs((prev) => prev.filter((x) => x.name !== name));
+    if (selectedDocFilter === name) {
+      setSelectedDocFilter(null);
+    }
+    if (summaryDocFilename === name) {
+      setSummaryDocFilename(null);
+    }
   }
 
   if (!authChecked) {
@@ -166,9 +181,26 @@ export default function Home() {
           docs={docs}
           onUploaded={handleUploaded}
           onDeleted={handleDeleted}
+          onSummarize={(name) => setSummaryDocFilename(name)}
+          selectedDocFilter={selectedDocFilter}
+          onSelectDocFilter={setSelectedDocFilter}
         />
-        <Chat hasDocs={docs.length > 0} />
+        <Chat
+          hasDocs={docs.length > 0}
+          docs={docs}
+          selectedDocFilter={selectedDocFilter}
+          onSelectDocFilter={setSelectedDocFilter}
+        />
       </div>
+
+      {/* AI Executive Summary Briefing Modal */}
+      <SummaryModal
+        filename={summaryDocFilename}
+        onClose={() => setSummaryDocFilename(null)}
+        onAskAboutDoc={(docName) => {
+          setSelectedDocFilter(docName);
+        }}
+      />
     </div>
   );
 }

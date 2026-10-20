@@ -23,6 +23,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core import exceptions as gexc
 from pydantic import BaseModel
+from typing import Optional
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -74,6 +75,13 @@ Context:
 {context_string}
 
 User Question: {query}
+
+Guidelines:
+- Give a direct, well-structured answer with clean formatting (bullet points, bold highlights) where appropriate.
+- If the question can be answered from context, you may optionally append 2 to 3 concise, relevant follow-up questions the user might want to explore, in this exact format at the very end:
+FOLLOW_UPS:
+- [Follow-up question 1]?
+- [Follow-up question 2]?
 """
 
 # Vector store. With CHROMA_API_KEY set (+ CHROMA_TENANT / CHROMA_DATABASE) the data lives
@@ -130,6 +138,7 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     history: list[Message] = []
+    doc_filter: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -349,8 +358,10 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
 
     # 1. Validate
     filename = file.filename or ""
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are supported.")
+    lower_name = filename.lower()
+    valid_exts = (".pdf", ".txt", ".md", ".markdown")
+    if not any(lower_name.endswith(ext) for ext in valid_exts):
+        raise HTTPException(400, "Supported formats: PDF, TXT, and Markdown (.md).")
 
     max_bytes = MAX_UPLOAD_MB * 1024 * 1024
     contents = file.file.read(max_bytes + 1)
@@ -359,15 +370,18 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
 
-    # 2. Extract selectable text and OCR scanned pages
+    # 2. Extract text
     started_at = time.perf_counter()
-    text = extract_pdf_text(contents)
+    if lower_name.endswith((".txt", ".md", ".markdown")):
+        text = contents.decode("utf-8", errors="replace").strip()
+    else:
+        text = extract_pdf_text(contents)
     extracted_at = time.perf_counter()
 
     # 3. Chunk
     chunks = chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
     if not chunks:
-        raise HTTPException(422, "No extractable text found in this PDF.")
+        raise HTTPException(422, "No extractable text found in this document.")
 
     # 4. Embed every chunk
     try:
@@ -442,10 +456,21 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
 
-    # Nothing ingested by this user yet -> no context, don't spend an API call
-    total = len(collection.get(where={"user_id": user_id}, include=[])["ids"])
+    # Determine filter: all documents owned by user or restricted to doc_filter
+    if request.doc_filter and request.doc_filter.strip():
+        where_filter = owned(user_id, request.doc_filter.strip())
+    else:
+        where_filter = {"user_id": user_id}
+
+    total = len(collection.get(where=where_filter, include=[])["ids"])
     if total == 0:
-        return {"answer": NO_ANSWER, "sources": [], "source_files": []}
+        return {
+            "answer": NO_ANSWER,
+            "sources": [],
+            "source_files": [],
+            "citations": [],
+            "suggested_followups": [],
+        }
 
     # 1. Embed query
     try:
@@ -458,21 +483,40 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
     results = collection.query(
         query_embeddings=[query_vector],
         n_results=min(TOP_K, total),
-        where={"user_id": user_id},
+        where=where_filter,
         include=["documents", "distances", "metadatas"],
     )
     distances: list[float] = results["distances"][0]
+    docs: list[str] = results["documents"][0]
+    metadatas: list[dict] = results["metadatas"][0]
+
     logger.info("Retrieval distances (cutoff %.2f): %s", MAX_DISTANCE, [round(d, 3) for d in distances])
-    relevant = [
-        (doc, meta, dist)
-        for doc, meta, dist in zip(results["documents"][0], results["metadatas"][0], distances)
-        if dist <= MAX_DISTANCE
-    ]
-    retrieved_chunks = [doc for doc, _, _ in relevant]
-    source_files = sorted({(meta or {}).get("source", "unknown") for _, meta, _ in relevant})
+
+    citations = []
+    for doc, meta, dist in zip(docs, metadatas, distances):
+        if dist <= MAX_DISTANCE:
+            source_name = (meta or {}).get("source", "Document")
+            chunk_idx = (meta or {}).get("chunk_index", 0)
+            # Cosine distance to match percentage
+            relevance = max(10, min(99, round((1.0 - dist) * 100)))
+            citations.append({
+                "text": doc,
+                "source": source_name,
+                "relevance": relevance,
+                "chunk_index": chunk_idx,
+            })
+
+    retrieved_chunks = [c["text"] for c in citations]
+    source_files = sorted(list({c["source"] for c in citations}))
 
     if not retrieved_chunks:
-        return {"answer": NO_ANSWER, "sources": [], "source_files": []}
+        return {
+            "answer": NO_ANSWER,
+            "sources": [],
+            "source_files": [],
+            "citations": [],
+            "suggested_followups": [],
+        }
 
     # 3. Build strict prompt
     context_string = "\n\n---\n\n".join(retrieved_chunks)
@@ -495,4 +539,79 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         logger.exception("Generation failed")
         raise to_http_error(exc, "Generation") from exc
 
-    return {"answer": answer, "sources": retrieved_chunks, "source_files": source_files}
+    # Parse suggested follow-up questions
+    suggested_followups: list[str] = []
+    if "FOLLOW_UPS:" in answer:
+        parts = answer.split("FOLLOW_UPS:")
+        answer = parts[0].strip()
+        for line in parts[1].splitlines():
+            cleaned = line.strip().lstrip("-*•0123456789. ")
+            if len(cleaned) > 5:
+                suggested_followups.append(cleaned)
+        suggested_followups = suggested_followups[:3]
+
+    return {
+        "answer": answer,
+        "sources": retrieved_chunks,
+        "source_files": source_files,
+        "citations": citations,
+        "suggested_followups": suggested_followups,
+    }
+
+
+@app.post("/documents/{filename:path}/summarize")
+def summarize_document(filename: str, user: dict = Depends(get_current_user)):
+    """Generate an executive-grade AI briefing and summary for an indexed document."""
+    user_id = str(user["id"])
+    require_api_key()
+
+    results = collection.get(where=owned(user_id, filename), include=["documents", "metadatas"])
+    docs = results.get("documents") or []
+    if not docs:
+        raise HTTPException(404, f"No content found for document '{filename}'.")
+
+    # Order chunks sequentially
+    metas = results.get("metadatas") or []
+    indexed_docs = []
+    for doc, meta in zip(docs, metas):
+        idx = (meta or {}).get("chunk_index", 0)
+        indexed_docs.append((idx, doc))
+    indexed_docs.sort(key=lambda x: x[0])
+    combined_text = "\n\n".join(t for _, t in indexed_docs)
+
+    # Gemini Flash has a large context window, 40k characters is fast and comprehensive
+    text_sample = combined_text[:40000]
+
+    summary_prompt = f"""You are an expert executive research analyst. Generate a comprehensive, professional executive briefing based ONLY on the provided document text.
+
+Format your output in clean, elegant Markdown using the following four sections:
+
+### 📌 Executive Overview
+A concise paragraph synthesizing the primary objective, context, and core thesis of the document.
+
+### 💡 Key Highlights & Critical Data
+- 3 to 5 bullet points highlighting the most significant findings, metrics, dates, or qualitative insights.
+
+### 🎯 Strategic Takeaways & Recommendations
+- 2 to 4 actionable conclusions, key risks, or next steps outlined or implied by the document.
+
+### ❓ Recommended Follow-up Inquiries
+- 3 thoughtful questions an analyst or executive should explore next based on this document.
+
+Document Name: {filename}
+Document Content:
+{text_sample}
+"""
+
+    try:
+        response = call_gemini(generation_model.generate_content, summary_prompt)
+        summary_md = response.text
+    except Exception as exc:
+        logger.exception("Summarization failed for %s", filename)
+        raise to_http_error(exc, "Summarization") from exc
+
+    return {
+        "filename": filename,
+        "summary": summary_md,
+        "total_chunks": len(docs),
+    }

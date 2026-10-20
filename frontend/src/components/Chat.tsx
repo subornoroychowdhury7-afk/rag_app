@@ -1,15 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { sendChat } from "@/lib/api";
+import { sendChat, type Citation } from "@/lib/api";
 import MarkdownRenderer from "./MarkdownRenderer";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   sources?: string[];
+  citations?: Citation[];
+  suggestedFollowups?: string[];
   isError?: boolean;
   timestamp: Date;
+}
+
+interface ChatProps {
+  hasDocs: boolean;
+  docs?: { name: string; chunks: number }[];
+  selectedDocFilter?: string | null;
+  onSelectDocFilter?: (docName: string | null) => void;
 }
 
 /* ---------- Sub-components ---------------------------------------- */
@@ -44,28 +53,90 @@ function TypingIndicator() {
   );
 }
 
-function Sources({ sources }: { sources: string[] }) {
-  if (sources.length === 0) return null;
+function CitationsView({
+  citations,
+  sources,
+}: {
+  citations?: Citation[];
+  sources?: string[];
+}) {
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+  const items = citations && citations.length > 0
+    ? citations
+    : (sources || []).map((s) => ({ text: s, source: "Document", relevance: 85 }));
+
+  if (items.length === 0) return null;
+
+  function copyPassage(text: string, index: number) {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 2000);
+  }
+
   return (
-    <details className="group mt-2 ml-11 text-sm">
-      <summary className="cursor-pointer select-none font-medium text-slate-500 transition-colors hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400">
-        📎 {sources.length} source{sources.length !== 1 ? "s" : ""} referenced
+    <details className="group mt-2.5 ml-11 text-sm">
+      <summary className="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white/70 px-3 py-1 text-xs font-semibold text-slate-600 shadow-xs transition-colors hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700/80 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:border-indigo-600 dark:hover:text-indigo-300">
+        <svg className="h-3.5 w-3.5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+        </svg>
+        <span>
+          {items.length} Grounded Source{items.length !== 1 ? "s" : ""}
+        </span>
       </summary>
-      <ul className="mt-2 space-y-2">
-        {sources.map((s, i) => (
-          <li
+
+      <div className="mt-2.5 space-y-2">
+        {items.map((c, i) => (
+          <div
             key={i}
-            className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50"
+            className="rounded-xl border border-slate-200/90 bg-white/80 p-3 shadow-xs dark:border-slate-700/80 dark:bg-slate-800/50"
           >
-            <p className="mb-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-              Passage {i + 1}
-            </p>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                  Passage {i + 1}
+                </span>
+                <span className="truncate text-xs font-medium text-slate-600 dark:text-slate-300" title={c.source}>
+                  {c.source}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {c.relevance && (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                      c.relevance >= 70
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
+                        : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-400"
+                    }`}
+                  >
+                    {c.relevance}% Match
+                  </span>
+                )}
+                <button
+                  onClick={() => copyPassage(c.text, i)}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+                  title="Copy passage quote"
+                >
+                  {copiedIndex === i ? (
+                    <svg className="h-3.5 w-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+
             <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              {s}
+              {c.text}
             </p>
-          </li>
+          </div>
         ))}
-      </ul>
+      </div>
     </details>
   );
 }
@@ -79,7 +150,7 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }}
-      className="rounded-md p-1 text-slate-400 opacity-0 transition-all hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+      className="rounded-md p-1.5 text-slate-400 opacity-0 transition-all hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-700 dark:hover:text-slate-300"
       title="Copy response"
     >
       {copied ? (
@@ -107,13 +178,22 @@ function formatTime(date: Date): string {
 
 const MAX_CHARS = 2000;
 
-export default function Chat({ hasDocs }: { hasDocs: boolean }) {
+export default function Chat({
+  hasDocs,
+  docs = [],
+  selectedDocFilter,
+  onSelectDocFilter,
+}: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -129,20 +209,143 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }
 
-  async function submit() {
-    const query = input.trim();
+  /* ---- Voice Dictation (Speech to Text) ---- */
+  function toggleListening() {
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.");
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = navigator.language || "en-US";
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        if (transcript) {
+          setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn("Speech recognition error:", event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error("Could not start speech recognition:", err);
+      setIsListening(false);
+    }
+  }
+
+  /* ---- Read Aloud (Text to Speech) ---- */
+  function toggleSpeak(idx: number, text: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      alert("Text-to-speech is not supported in this browser.");
+      return;
+    }
+
+    if (speakingIdx === idx) {
+      window.speechSynthesis.cancel();
+      setSpeakingIdx(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    // Strip markdown formatting for natural voice cadence
+    const cleanText = text
+      .replace(/[#*`_~>[\]()]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+
+    utterance.onend = () => setSpeakingIdx(null);
+    utterance.onerror = () => setSpeakingIdx(null);
+
+    window.speechSynthesis.speak(utterance);
+    setSpeakingIdx(idx);
+  }
+
+  /* ---- Chat Export to Markdown ---- */
+  function exportChat() {
+    if (messages.length === 0) return;
+
+    const header = `# DocQ&A Conversation Export\n*Exported on ${new Date().toLocaleString()} · Total Messages: ${messages.length}*\n\n---\n\n`;
+    const body = messages
+      .map((m) => {
+        const author = m.role === "user" ? "👤 User" : "🤖 DocQ&A Assistant";
+        const time = formatTime(m.timestamp);
+        let out = `### ${author} (${time})\n\n${m.content}\n`;
+        if (m.citations && m.citations.length > 0) {
+          out += `\n**Referenced Sources:**\n`;
+          m.citations.forEach((c, idx) => {
+            out += `- **Passage ${idx + 1}** (${c.source} · ${c.relevance}% Match):\n  > "${c.text.replace(/\n/g, " ")}"\n`;
+          });
+        }
+        return out;
+      })
+      .join("\n---\n\n");
+
+    const blob = new Blob([header + body], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `DocQA_Chat_Export_${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function submitQuery(queryText?: string) {
+    const query = (queryText !== undefined ? queryText : input).trim();
     if (!query || loading) return;
+
     setInput("");
     setMessages((m) => [...m, { role: "user", content: query, timestamp: new Date() }]);
     setLoading(true);
+
     try {
       const history = messages
         .filter((m) => !m.isError)
         .map((m) => ({ role: m.role, content: m.content }));
-      const res = await sendChat(query, history);
+
+      const res = await sendChat(query, history, selectedDocFilter);
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: res.answer, sources: res.sources, timestamp: new Date() },
+        {
+          role: "assistant",
+          content: res.answer,
+          sources: res.sources,
+          citations: res.citations,
+          suggestedFollowups: res.suggested_followups,
+          timestamp: new Date(),
+        },
       ]);
     } catch (err) {
       const content = err instanceof Error ? err.message : "Something went wrong.";
@@ -154,25 +357,40 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-slate-50/50 dark:bg-slate-950">
-      {/* Messages */}
+      {/* Messages Viewport */}
       <div ref={scrollRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto px-4 py-6 md:px-10">
         <div className="mx-auto flex max-w-3xl flex-col gap-5">
-          {/* Clear conversation */}
+          {/* Top Actions: Export and Clear */}
           {messages.length > 0 && !loading && (
-            <div className="flex justify-center">
+            <div className="flex items-center justify-center gap-2">
               <button
-                onClick={() => setMessages([])}
-                className="rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-500 shadow-sm transition-all hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-200"
+                onClick={exportChat}
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1 text-xs font-medium text-slate-600 shadow-xs transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                title="Export conversation as Markdown"
               >
-                ✕ Clear conversation
+                <svg className="h-3.5 w-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                <span>Export Chat</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  window.speechSynthesis?.cancel();
+                  setSpeakingIdx(null);
+                  setMessages([]);
+                }}
+                className="rounded-full border border-slate-200 bg-white px-3.5 py-1 text-xs font-medium text-slate-500 shadow-xs transition hover:border-slate-300 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
+              >
+                ✕ Clear
               </button>
             </div>
           )}
 
-          {/* Empty state */}
+          {/* Empty State */}
           {messages.length === 0 && (
-            <div className="animate-fade-in-up mt-20 flex flex-col items-center text-center">
-              <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+            <div className="animate-fade-in-up mt-16 flex flex-col items-center text-center">
+              <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-xl shadow-indigo-500/25">
                 <svg
                   className="h-10 w-10 text-white"
                   fill="none"
@@ -187,23 +405,30 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
                   />
                 </svg>
               </div>
-              <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-200">
-                {hasDocs ? "Ask anything about your documents" : "Upload a PDF to get started"}
+
+              <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl">
+                {hasDocs ? "Ask anything about your knowledge base" : "Upload documents to begin"}
               </h2>
-              <p className="mt-2 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+
+              <p className="mt-2 max-w-md text-sm text-slate-500 dark:text-slate-400">
                 {hasDocs
-                  ? "I'll search through your uploaded documents and provide answers with source references."
-                  : "Drop a PDF in the sidebar and I'll index it for intelligent Q&A."}
+                  ? "DocQ&A searches your uploaded PDF, Markdown, and TXT files using vector similarity and provides verified answers."
+                  : "Drop files in the left sidebar to index them with Gemini neural embeddings."}
               </p>
+
               {hasDocs && (
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  {["Summarize the key points", "What are the main findings?", "Explain the methodology"].map((q) => (
+                  {[
+                    "Summarize the key points",
+                    "What are the main findings or metrics?",
+                    "What actionable recommendations are outlined?",
+                  ].map((q) => (
                     <button
                       key={q}
-                      onClick={() => setInput(q)}
-                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm transition-all hover:border-indigo-300 hover:text-indigo-700 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-indigo-600 dark:hover:text-indigo-300"
+                      onClick={() => submitQuery(q)}
+                      className="rounded-full border border-slate-200/90 bg-white px-4 py-2 text-xs font-medium text-slate-700 shadow-xs transition hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-indigo-600 dark:hover:text-indigo-300"
                     >
-                      {q}
+                      💡 {q}
                     </button>
                   ))}
                 </div>
@@ -211,7 +436,7 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
             </div>
           )}
 
-          {/* Message bubbles */}
+          {/* Message History */}
           {messages.map((m, i) =>
             m.role === "user" ? (
               <div key={i} className="animate-fade-in-up flex justify-end">
@@ -227,7 +452,7 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
             ) : (
               <div key={i} className="animate-fade-in-up flex flex-col">
                 <div className="group flex items-start gap-3">
-                  {/* Bot avatar */}
+                  {/* Bot Avatar */}
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 shadow-sm">
                     <svg
                       className="h-4 w-4 text-white"
@@ -243,27 +468,76 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
                       />
                     </svg>
                   </div>
+
                   <div className="flex-1 min-w-0">
                     <div
-                      className={`rounded-2xl rounded-tl-md border px-4 py-2.5 text-sm leading-relaxed ${
+                      className={`rounded-2xl rounded-tl-md border px-4 py-3 text-sm leading-relaxed ${
                         m.isError
                           ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300"
-                          : "border-slate-200 bg-white text-slate-800 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                          : "border-slate-200/90 bg-white text-slate-800 shadow-xs dark:border-slate-700/80 dark:bg-slate-800 dark:text-slate-200"
                       }`}
                     >
                       {m.isError ? m.content : <MarkdownRenderer content={m.content} />}
                     </div>
-                    <div className="mt-1 flex items-center gap-2">
+
+                    {/* Action Bar (Copy + Speak) */}
+                    <div className="mt-1 flex items-center gap-1.5">
                       <span className="text-[11px] text-slate-400 dark:text-slate-500">
                         {formatTime(m.timestamp)}
                       </span>
-                      {!m.isError && <CopyButton text={m.content} />}
+                      {!m.isError && (
+                        <>
+                          <CopyButton text={m.content} />
+                          <button
+                            onClick={() => toggleSpeak(i, m.content)}
+                            className="rounded-md p-1.5 text-slate-400 opacity-0 transition-all hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+                            title={speakingIdx === i ? "Stop speaking" : "Read aloud"}
+                          >
+                            {speakingIdx === i ? (
+                              <svg className="h-4 w-4 text-indigo-600 dark:text-indigo-400 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                              </svg>
+                            ) : (
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.757 3.63 8.25 4.51 8.25H6.75z"
+                                />
+                              </svg>
+                            )}
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
-                {m.sources && <Sources sources={m.sources} />}
+
+                {/* Grounded Citations with relevance percentages */}
+                {(m.citations || m.sources) && (
+                  <CitationsView citations={m.citations} sources={m.sources} />
+                )}
+
+                {/* Suggested Follow-ups */}
+                {m.suggestedFollowups && m.suggestedFollowups.length > 0 && (
+                  <div className="mt-3 ml-11 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+                      Suggested:
+                    </span>
+                    {m.suggestedFollowups.map((q, qIdx) => (
+                      <button
+                        key={qIdx}
+                        onClick={() => submitQuery(q)}
+                        className="rounded-full border border-indigo-200/80 bg-indigo-50/70 px-3 py-1 text-xs font-medium text-indigo-700 shadow-2xs transition hover:border-indigo-300 hover:bg-indigo-100 hover:shadow-xs dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-900/50"
+                      >
+                        ✨ {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            ),
+            )
           )}
 
           {loading && <TypingIndicator />}
@@ -274,7 +548,7 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
         {showScrollBtn && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 rounded-full border border-slate-200 bg-white p-2 shadow-lg transition-all hover:shadow-xl dark:border-slate-700 dark:bg-slate-800 md:right-10"
+            className="absolute bottom-4 right-4 rounded-full border border-slate-200 bg-white p-2.5 shadow-lg transition-all hover:shadow-xl dark:border-slate-700 dark:bg-slate-800 md:right-10"
             aria-label="Scroll to bottom"
           >
             <svg
@@ -290,9 +564,28 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
         )}
       </div>
 
-      {/* Input area */}
-      <div className="border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900 md:px-10">
-        <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
+      {/* Input Dock */}
+      <div className="border-t border-slate-200/80 bg-white/90 px-4 py-3 backdrop-blur-md dark:border-slate-700/80 dark:bg-slate-900/90 md:px-10">
+        <div className="mx-auto flex max-w-3xl flex-col gap-2">
+          {/* Active Document Filter Badge */}
+          {selectedDocFilter && (
+            <div className="flex items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/80 px-3 py-1.5 text-xs text-indigo-800 dark:border-indigo-900/60 dark:bg-indigo-950/50 dark:text-indigo-300">
+              <div className="flex items-center gap-2 truncate">
+                <span className="flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+                <span className="font-semibold">Scoped Query:</span>
+                <span className="truncate font-mono text-[11px] underline">
+                  {selectedDocFilter}
+                </span>
+              </div>
+              <button
+                onClick={() => onSelectDocFilter && onSelectDocFilter(null)}
+                className="ml-2 font-semibold text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-200"
+              >
+                ✕ Search All Docs
+              </button>
+            </div>
+          )}
+
           <div className="flex items-end gap-2">
             <textarea
               value={input}
@@ -300,19 +593,46 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  submit();
+                  submitQuery();
                 }
               }}
               rows={1}
               placeholder={
-                hasDocs ? "Ask a question about your documents…" : "Upload a PDF first to start asking questions…"
+                hasDocs
+                  ? selectedDocFilter
+                    ? `Ask anything specifically about ${selectedDocFilter}…`
+                    : "Ask questions across all indexed documents…"
+                  : "Upload a document in the sidebar to start asking questions…"
               }
               disabled={!hasDocs}
               aria-label="Your question"
               className="max-h-40 min-h-11 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-indigo-500"
             />
+
+            {/* Voice Dictation Button */}
             <button
-              onClick={submit}
+              type="button"
+              onClick={toggleListening}
+              disabled={!hasDocs}
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all ${
+                isListening
+                  ? "bg-rose-500 text-white shadow-lg ring-4 ring-rose-500/30 animate-pulse"
+                  : "border border-slate-200 bg-white text-slate-500 hover:border-indigo-300 hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+              } disabled:cursor-not-allowed disabled:opacity-40`}
+              title={isListening ? "Listening... click to stop" : "Voice dictation (speech to text)"}
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15a3 3 0 01-3-3V4.5a3 3 0 116 0v7.5a3 3 0 01-3 3z"
+                />
+              </svg>
+            </button>
+
+            {/* Send Button */}
+            <button
+              onClick={() => submitQuery()}
               disabled={loading || !input.trim() || !hasDocs}
               className="flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 px-5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
@@ -323,11 +643,20 @@ export default function Chat({ hasDocs }: { hasDocs: boolean }) {
                   d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
                 />
               </svg>
-              Send
+              <span>Send</span>
             </button>
           </div>
+
           <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 dark:text-slate-500">
-            <span>Enter to send · Shift+Enter for new line</span>
+            <span>
+              {isListening ? (
+                <span className="font-semibold text-rose-500 animate-pulse">
+                  🎙️ Listening… Speak clearly into your mic
+                </span>
+              ) : (
+                "Enter to send · Shift+Enter for new line"
+              )}
+            </span>
             <span className={input.length > MAX_CHARS * 0.9 ? "text-red-500" : ""}>
               {input.length > 0 ? `${input.length}/${MAX_CHARS}` : ""}
             </span>

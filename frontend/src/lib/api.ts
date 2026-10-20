@@ -12,10 +12,25 @@ export interface UploadResult {
   chunks_processed: number;
 }
 
+export interface Citation {
+  text: string;
+  source: string;
+  relevance: number;
+  chunk_index?: number;
+}
+
 export interface ChatResult {
   answer: string;
   sources: string[];
   source_files?: string[];
+  citations?: Citation[];
+  suggested_followups?: string[];
+}
+
+export interface DocumentSummaryResult {
+  filename: string;
+  summary: string;
+  total_chunks: number;
 }
 
 export interface DeleteResult {
@@ -219,14 +234,36 @@ export function logout(): void {
 
 /* ---------- Documents & chat -------------------------------------- */
 
-export function uploadPdf(file: File) {
+export function uploadFile(file: File) {
   const form = new FormData();
   form.append("file", file);
   return request<UploadResult>("/upload", { method: "POST", body: form });
 }
 
-export function sendChat(query: string, history: ChatMessage[] = []) {
-  return request<ChatResult>("/chat", jsonPost({ query, history }));
+export const uploadPdf = uploadFile;
+
+export function sendChat(
+  query: string,
+  history: ChatMessage[] = [],
+  docFilter?: string | null
+) {
+  const payload: { query: string; history: ChatMessage[]; doc_filter?: string } = {
+    query,
+    history,
+  };
+  if (docFilter && docFilter.trim()) {
+    payload.doc_filter = docFilter.trim();
+  }
+  return request<ChatResult>("/chat", jsonPost(payload));
+}
+
+export function summarizeDocument(filename: string) {
+  return request<DocumentSummaryResult>(
+    `/documents/${encodeURIComponent(filename)}/summarize`,
+    {
+      method: "POST",
+    }
+  );
 }
 
 export function deleteDocument(filename: string) {
