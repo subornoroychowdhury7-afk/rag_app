@@ -372,10 +372,15 @@ def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
     """
 
     # 1. Resend HTTPS API (Port 443 - works on Render free tier!)
-    resend_key = (os.getenv("RESEND_API_KEY") or "").strip()
-    if resend_key:
-        from_email = (os.getenv("RESEND_FROM") or os.getenv("SMTP_FROM") or "DocQ&A <onboarding@resend.dev>").strip()
-        return _send_via_resend(resend_key, from_email, recipient, subject, html_content, text_content)
+    raw_resend = (
+        os.getenv("RESEND_API_KEY")
+        or os.getenv("resend_api_key")
+        or os.getenv("RESEND_KEY")
+        or ""
+    ).strip().strip('"').strip("'")
+    if raw_resend:
+        from_email = (os.getenv("RESEND_FROM") or os.getenv("SMTP_FROM") or "DocQ&A <onboarding@resend.dev>").strip().strip('"').strip("'")
+        return _send_via_resend(raw_resend, from_email, recipient, subject, html_content, text_content)
 
     # 2. Brevo HTTPS API (Port 443)
     brevo_key = (os.getenv("BREVO_API_KEY") or "").strip()
