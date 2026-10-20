@@ -293,13 +293,19 @@ def _send_via_resend(api_key: str, from_addr: str, to_addr: str, subject: str, h
             "subject": subject,
             "html": html,
             "text": text,
+            "headers": {
+                "X-Entity-Ref-ID": f"docqa-{int(time.time())}-{secrets.token_hex(4)}",
+                "Auto-Submitted": "auto-generated",
+                "X-Auto-Response-Suppress": "All",
+            },
         }
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=12) as resp:
+            resp_body = resp.read().decode("utf-8", errors="replace")
             if resp.status in (200, 201):
-                logger.info("Sent OTP email via Resend to %s", to_addr)
+                logger.info("Sent OTP email via Resend to %s: %s", to_addr, resp_body)
                 return True, None
-            return False, f"Resend API returned status {resp.status}"
+            return False, f"Resend API returned status {resp.status}: {resp_body}"
     except urllib.error.HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
         logger.exception("Resend API error: %s - %s", exc.code, err_body)
@@ -346,7 +352,7 @@ def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
     logger.info(">>> [OTP VERIFICATION CODE for %s]: %s <<<", recipient, otp_code)
     logger.info("--------------------------------------------------")
 
-    subject = f"Your DocQ&A Verification Code: {otp_code}"
+    subject = "Your DocQ&A verification code"
     text_content = (
         f"Hello,\n\n"
         f"Your verification code for DocQ&A is: {otp_code}\n\n"
