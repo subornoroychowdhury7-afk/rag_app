@@ -29,5 +29,7 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      - key: RESEND_FROM
+        sync: false
       - key: ALLOWED_ORIGINS
         value: "*"
