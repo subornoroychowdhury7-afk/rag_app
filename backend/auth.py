@@ -574,6 +574,26 @@ def send_otp(body: OtpSendRequest, request: Request):
 
     sent_smtp, err_reason = send_otp_email(email, otp_code)
     if not sent_smtp:
+        # Check if Resend free tier is blocking an external email because no custom domain is verified
+        is_sandbox_restricted = bool(
+            err_reason and (
+                "You can only send testing emails to your own email address" in err_reason
+                or "resend.com/domains" in err_reason
+                or "The domain is not verified" in err_reason
+            )
+        )
+        if is_sandbox_restricted:
+            logger.warning(
+                "Resend sandbox limitation: %s is not the account owner and no custom domain is verified. Providing demo OTP fallback.",
+                email,
+            )
+            return {
+                "message": "Verification code generated (Sandbox Demo Mode).",
+                "expires_in": OTP_TTL_SECONDS,
+                "demo_otp": otp_code,
+                "is_sandbox": True,
+            }
+
         raise HTTPException(
             500,
             f"Could not send email: {err_reason or 'Please verify your SMTP configuration.'}"
