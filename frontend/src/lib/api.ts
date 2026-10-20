@@ -157,9 +157,9 @@ export async function register(email: string, password: string): Promise<AuthRes
   return { token, user, access_token: token };
 }
 
-export async function sendOtp(email: string): Promise<{ message: string; dev_otp?: string; expires_in: number }> {
+export async function sendOtp(email: string): Promise<{ message: string; expires_in: number }> {
   const cleanEmail = email.trim().toLowerCase();
-  return request<{ message: string; dev_otp?: string; expires_in: number }>(
+  return request<{ message: string; expires_in: number }>(
     "/auth/otp/send",
     jsonPost({ email: cleanEmail }),
     false,

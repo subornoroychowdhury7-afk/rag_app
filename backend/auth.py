@@ -453,9 +453,21 @@ def send_otp(body: OtpSendRequest, request: Request):
         )
 
     sent_smtp = send_otp_email(email, otp_code)
+    if not sent_smtp:
+        if not SMTP_CONFIGURED:
+            raise HTTPException(
+                503,
+                "Email delivery service is not configured on the server. "
+                "Please set SMTP credentials (SMTP_HOST, SMTP_USER, SMTP_PASSWORD) in Render environment variables, "
+                "or sign in using Password / Register.",
+            )
+        raise HTTPException(
+            500,
+            "Failed to deliver verification email. Please check your SMTP settings and try again.",
+        )
+
     return {
-        "message": f"Verification code sent to {email}.",
-        "dev_otp": None if sent_smtp else otp_code,
+        "message": f"Verification code sent to {email}. Please check your inbox.",
         "expires_in": OTP_TTL_SECONDS,
     }
 

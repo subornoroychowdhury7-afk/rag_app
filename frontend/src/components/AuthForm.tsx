@@ -22,7 +22,6 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
   const [otpStep, setOtpStep] = useState<"request" | "verify">("request");
   const [otpCode, setOtpCode] = useState("");
   const [otpNotice, setOtpNotice] = useState<string | null>(null);
-  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
 
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +44,6 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
     setOtpCode("");
     setOtpStep("request");
     setOtpNotice(null);
-    setDevOtpHint(null);
   }
 
   // Handle OTP Send
@@ -66,10 +64,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
       setOtpStep("verify");
       setOtpNotice(res.message);
       setResendCooldown(30);
-      if (res.dev_otp) {
-        setDevOtpHint(res.dev_otp);
-        setOtpCode(res.dev_otp);
-      }
+      setOtpCode("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send verification code.");
     } finally {
@@ -303,13 +298,6 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
                       className={`${inputClass} text-center font-mono text-lg tracking-[0.35em]`}
                     />
                   </div>
-
-                  {devOtpHint && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-300">
-                      <strong>Demo/Local Mode Code:</strong> <span className="font-mono font-bold tracking-wider">{devOtpHint}</span>
-                      <p className="mt-0.5 text-[11px] opacity-80">(Configure SMTP in production for real email delivery)</p>
-                    </div>
-                  )}
 
                   <button
                     type="submit"
