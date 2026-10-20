@@ -42,13 +42,28 @@ if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
     logger.warning("JWT_SECRET is not set - using a temporary secret.")
 
-# SMTP Configuration
-SMTP_HOST = (os.getenv("SMTP_HOST") or "").strip()
-SMTP_PORT = int((os.getenv("SMTP_PORT") or "587").strip())
-SMTP_USER = (os.getenv("SMTP_USER") or "").strip()
-SMTP_PASSWORD = (os.getenv("SMTP_PASSWORD") or "").strip()
-SMTP_FROM = (os.getenv("SMTP_FROM") or SMTP_USER or "noreply@docqa.app").strip()
-SMTP_CONFIGURED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+# SMTP Configuration Helper
+def get_smtp_config():
+    host = (os.getenv("SMTP_HOST") or os.getenv("MAIL_HOST") or os.getenv("SMTP_SERVER") or "").strip()
+    try:
+        port = int((os.getenv("SMTP_PORT") or os.getenv("MAIL_PORT") or "587").strip())
+    except ValueError:
+        port = 587
+    user = (os.getenv("SMTP_USER") or os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USERNAME") or "").strip()
+    raw_pass = (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_PASS") or os.getenv("MAIL_PASSWORD") or "").strip()
+    # Strip spaces from Gmail App Passwords (e.g. 'abcd efgh ijkl mnop' -> 'abcdefghijklmnop')
+    password = raw_pass.replace(" ", "") if ("gmail" in host.lower() or len(raw_pass.replace(" ", "")) == 16) else raw_pass
+    from_addr = (os.getenv("SMTP_FROM") or os.getenv("MAIL_FROM") or user or "noreply@docqa.app").strip()
+    missing = [k for k, v in [("SMTP_HOST", host), ("SMTP_USER", user), ("SMTP_PASSWORD", password)] if not v]
+    return {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "from": from_addr,
+        "is_configured": len(missing) == 0,
+        "missing": missing,
+    }
 
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
@@ -260,20 +275,22 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
 # --------------------------------------------------------------------------- #
 # Email Dispatcher
 # --------------------------------------------------------------------------- #
-def send_otp_email(recipient: str, otp_code: str) -> bool:
-    """Send OTP code via SMTP if configured. Return True if sent via SMTP."""
+def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
+    """Send OTP code via SMTP if configured. Return (True, None) or (False, error_reason)."""
+    cfg = get_smtp_config()
     logger.info("--------------------------------------------------")
     logger.info(">>> [OTP VERIFICATION CODE for %s]: %s <<<", recipient, otp_code)
     logger.info("--------------------------------------------------")
 
-    if not SMTP_CONFIGURED:
-        logger.info("SMTP is not configured. OTP code logged above for developer/demo use.")
-        return False
+    if not cfg["is_configured"]:
+        missing_vars = ", ".join(cfg["missing"])
+        logger.warning("SMTP not configured. Missing variables: %s", missing_vars)
+        return False, f"Missing SMTP environment variables: {missing_vars}"
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"Your DocQ&A Verification Code: {otp_code}"
-        msg["From"] = f"DocQ&A <{SMTP_FROM}>"
+        msg["From"] = f"DocQ&A <{cfg['from']}>"
         msg["To"] = recipient
 
         text_content = (
@@ -302,21 +319,24 @@ def send_otp_email(recipient: str, otp_code: str) -> bool:
         msg.attach(MIMEText(text_content, "plain"))
         msg.attach(MIMEText(html_content, "html"))
 
-        if SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
+        if cfg["port"] == 465:
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=12) as server:
+                server.login(cfg["user"], cfg["password"])
                 server.send_message(msg)
         else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=12) as server:
                 server.starttls()
-                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.login(cfg["user"], cfg["password"])
                 server.send_message(msg)
 
         logger.info("Sent OTP email successfully to %s", recipient)
-        return True
+        return True, None
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.exception("SMTP authentication failed for %s: %s", recipient, exc)
+        return False, "SMTP authentication failed. Please verify your Gmail address and 16-character App Password."
     except Exception as exc:
         logger.exception("Failed to deliver OTP email via SMTP to %s: %s", recipient, exc)
-        return False
+        return False, f"Email delivery error ({type(exc).__name__}): {str(exc)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -452,18 +472,11 @@ def send_otp(body: OtpSendRequest, request: Request):
             (email, otp_code, expires_at, now, now),
         )
 
-    sent_smtp = send_otp_email(email, otp_code)
+    sent_smtp, err_reason = send_otp_email(email, otp_code)
     if not sent_smtp:
-        if not SMTP_CONFIGURED:
-            raise HTTPException(
-                503,
-                "Email delivery service is not configured on the server. "
-                "Please set SMTP credentials (SMTP_HOST, SMTP_USER, SMTP_PASSWORD) in Render environment variables, "
-                "or sign in using Password / Register.",
-            )
         raise HTTPException(
             500,
-            "Failed to deliver verification email. Please check your SMTP settings and try again.",
+            f"Could not send email: {err_reason or 'Please verify your SMTP configuration.'}"
         )
 
     return {
