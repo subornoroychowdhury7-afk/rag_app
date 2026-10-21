@@ -148,48 +148,40 @@ function jsonPost(body: unknown): RequestInit {
   };
 }
 
-export type LoginOrRegisterResult = {
-  otp_required: boolean;
-  message: string;
-  expires_in?: number;
-  email: string;
-};
-
-export async function login(email: string, password: string): Promise<LoginOrRegisterResult> {
+export async function login(email: string, password: string): Promise<AuthResult> {
   const cleanEmail = email.trim().toLowerCase();
-  return request<LoginOrRegisterResult>("/auth/login", jsonPost({ email: cleanEmail, password }), false);
-}
-
-export async function register(email: string, password: string): Promise<LoginOrRegisterResult> {
-  const cleanEmail = email.trim().toLowerCase();
-  return request<LoginOrRegisterResult>("/auth/register", jsonPost({ email: cleanEmail, password }), false);
-}
-
-export async function sendOtp(
-  email: string
-): Promise<{ message: string; expires_in: number }> {
-  const cleanEmail = email.trim().toLowerCase();
-  return request<{ message: string; expires_in: number }>(
-    "/auth/otp/send",
-    jsonPost({ email: cleanEmail }),
-    false,
-  );
-}
-
-export async function verifyOtp(email: string, otp: string): Promise<AuthResult> {
-  const cleanEmail = email.trim().toLowerCase();
-  const res = await request<any>(
-    "/auth/otp/verify",
-    jsonPost({ email: cleanEmail, otp: otp.trim() }),
-    false,
-  );
+  const res = await request<{
+    token?: string;
+    access_token?: string;
+    token_type?: string;
+    expires_in?: number;
+    user?: AuthUser;
+  }>("/auth/login", jsonPost({ email: cleanEmail, password }), false);
   const token = res.token || res.access_token;
-  if (!token) throw new Error("OTP verification failed: No authentication token received.");
+  if (!token) throw new Error("Login failed: No authentication token received.");
   const user: AuthUser = res.user?.email
     ? { id: res.user.id, email: res.user.email }
     : { email: cleanEmail };
   setAuthSession(token, user.email);
-  return { token, user, access_token: token };
+  return { token, user, access_token: token, token_type: res.token_type, expires_in: res.expires_in };
+}
+
+export async function register(email: string, password: string): Promise<AuthResult> {
+  const cleanEmail = email.trim().toLowerCase();
+  const res = await request<{
+    token?: string;
+    access_token?: string;
+    token_type?: string;
+    expires_in?: number;
+    user?: AuthUser;
+  }>("/auth/register", jsonPost({ email: cleanEmail, password }), false);
+  const token = res.token || res.access_token;
+  if (!token) throw new Error("Registration failed: No authentication token received.");
+  const user: AuthUser = res.user?.email
+    ? { id: res.user.id, email: res.user.email }
+    : { email: cleanEmail };
+  setAuthSession(token, user.email);
+  return { token, user, access_token: token, token_type: res.token_type, expires_in: res.expires_in };
 }
 
 export async function getMe(): Promise<{ user: AuthUser }> {

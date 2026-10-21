@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
-import { login, register, sendOtp, verifyOtp, type AuthUser } from "@/lib/api";
+import { useState, type FormEvent } from "react";
+import { login, register, type AuthUser } from "@/lib/api";
 import Spinner from "./Spinner";
 
-type AuthMethod = "otp" | "password" | "register";
+type AuthMethod = "password" | "register";
 
 const MIN_PASSWORD = 8;
 
@@ -12,91 +12,21 @@ const inputClass =
   "w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500";
 
 export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => void }) {
-  const [method, setMethod] = useState<AuthMethod>("otp");
+  const [method, setMethod] = useState<AuthMethod>("password");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-
-  // OTP state
-  const [otpStep, setOtpStep] = useState<"request" | "verify">("request");
-  const [otpCode, setOtpCode] = useState("");
-  const [otpNotice, setOtpNotice] = useState<string | null>(null);
-  const [resendCooldown, setResendCooldown] = useState(0);
-
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  // Countdown timer for OTP resend
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [resendCooldown]);
 
   function switchMethod(next: AuthMethod) {
     setMethod(next);
     setError(null);
     setPassword("");
     setConfirm("");
-    setOtpCode("");
-    setOtpStep("request");
-    setOtpNotice(null);
   }
 
-  // Handle OTP Send
-  async function handleSendOtp(e?: FormEvent) {
-    if (e) e.preventDefault();
-    if (busy) return;
-    setError(null);
-
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) {
-      setError("Please enter a valid email address to receive your code.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const res = await sendOtp(cleanEmail);
-      setOtpStep("verify");
-      setOtpNotice(res.message);
-      setOtpCode("");
-      setResendCooldown(30);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send verification code.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // Handle OTP Verify
-  async function handleVerifyOtp(e: FormEvent) {
-    e.preventDefault();
-    if (busy) return;
-    setError(null);
-
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanOtp = otpCode.trim();
-    if (!cleanOtp || cleanOtp.length < 6) {
-      setError("Please enter the 6-digit verification code.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const res = await verifyOtp(cleanEmail, cleanOtp);
-      onAuthed(res.user);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Verification failed. Check the code.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // Handle Password Submit
   async function handlePasswordSubmit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
@@ -125,12 +55,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
           ? await register(cleanEmail, password)
           : await login(cleanEmail, password);
 
-      // Password accepted / registered -> require email OTP to establish session
-      setMethod("otp");
-      setOtpStep("verify");
-      setOtpCode("");
-      setOtpNotice(res.message);
-      setResendCooldown(30);
+      onAuthed(res.user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
     } finally {
@@ -199,18 +124,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
         </div>
 
         {/* Method Switcher Tabs */}
-        <div className="mb-5 grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" role="tablist" aria-label="Sign in method">
-          <button
-            type="button"
-            onClick={() => switchMethod("otp")}
-            className={`rounded-lg py-1.5 transition-all ${
-              method === "otp"
-              ? "bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-white"
-                : "hover:text-slate-900 dark:hover:text-white"
-            }`}
-          >
-            Email Code
-          </button>
+        <div className="mb-5 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" role="tablist" aria-label="Sign in method">
           <button
             type="button"
             onClick={() => switchMethod("password")}
@@ -236,202 +150,95 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_12px_42px_-22px_rgba(15,23,42,0.22)] sm:p-8 dark:border-slate-800 dark:bg-slate-900 dark:shadow-none">
-          {/* Method 1: OTP Login */}
-          {method === "otp" && (
+          <form onSubmit={handlePasswordSubmit} noValidate className="space-y-4">
             <div>
-              {otpStep === "request" ? (
-                <form onSubmit={handleSendOtp} noValidate className="space-y-4">
-                  <div>
-                    <label
-                      htmlFor="otp-email"
-                      className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
-                    >
-                      Email address
-                    </label>
-                    <input
-                      id="otp-email"
-                      type="email"
-                      inputMode="email"
-                      autoComplete="email"
-                      autoFocus
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      disabled={busy}
-                      placeholder="you@example.com"
-                      className={inputClass}
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={busy || !email.trim()}
-                    className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busy && <Spinner className="h-4 w-4" />}
-                    {busy ? "Sending code…" : "Send verification code"}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleVerifyOtp} noValidate className="space-y-4">
-                  <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                    <span>Code sent to: <strong className="text-slate-700 dark:text-slate-200">{email}</strong></span>
-                    <button
-                      type="button"
-                      onClick={() => setOtpStep("request")}
-                      className="text-indigo-600 hover:underline dark:text-indigo-400"
-                    >
-                      Change
-                    </button>
-                  </div>
-
-                  <div className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/70 p-2.5 text-xs text-indigo-900 dark:border-indigo-900/40 dark:bg-indigo-950/40 dark:text-indigo-300">
-                    <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span>Check your <strong>Spam</strong> or <strong>Promotions</strong> folder if the email doesn't appear in your Primary inbox within a few seconds.</span>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="otp-code"
-                      className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
-                    >
-                      6-Digit Verification Code
-                    </label>
-                    <input
-                      id="otp-code"
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={6}
-                      autoFocus
-                      value={otpCode}
-                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                      disabled={busy}
-                      placeholder="• • • • • •"
-                      className={`${inputClass} text-center font-mono text-lg tracking-[0.35em]`}
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={busy || otpCode.length < 6}
-                    className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busy && <Spinner className="h-4 w-4" />}
-                    {busy ? "Verifying…" : "Verify and sign in"}
-                  </button>
-
-                  <div className="flex justify-center text-xs text-slate-500 dark:text-slate-400">
-                    {resendCooldown > 0 ? (
-                      <span>Resend code in {resendCooldown}s</span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleSendOtp()}
-                        disabled={busy}
-                        className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                      >
-                        Resend code
-                      </button>
-                    )}
-                  </div>
-                </form>
-              )}
+              <label
+                htmlFor="pwd-email"
+                className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
+              >
+                Email
+              </label>
+              <input
+                id="pwd-email"
+                type="email"
+                inputMode="email"
+                autoComplete="username"
+                autoFocus
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={busy}
+                placeholder="you@example.com"
+                className={inputClass}
+              />
             </div>
-          )}
 
-          {/* Method 2 & 3: Password Login or Register */}
-          {method !== "otp" && (
-            <form onSubmit={handlePasswordSubmit} noValidate className="space-y-4">
+            <div>
+              <label
+                htmlFor="password"
+                className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
+              >
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete={method === "register" ? "new-password" : "current-password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={busy}
+                  placeholder={
+                    method === "register" ? `At least ${MIN_PASSWORD} characters` : "Your password"
+                  }
+                  className={`${inputClass} pr-16`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute inset-y-0 right-0 px-3 text-xs font-medium text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+            </div>
+
+            {method === "register" && (
               <div>
                 <label
-                  htmlFor="pwd-email"
+                  htmlFor="confirm"
                   className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
                 >
-                  Email
+                  Confirm password
                 </label>
                 <input
-                  id="pwd-email"
-                  type="email"
-                  inputMode="email"
-                  autoComplete="username"
-                  autoFocus
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="confirm"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
                   disabled={busy}
-                  placeholder="you@example.com"
+                  placeholder="Re-enter your password"
                   className={inputClass}
                 />
               </div>
+            )}
 
-              <div>
-                <label
-                  htmlFor="password"
-                  className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
-                >
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    id="password"
-                    type={showPassword ? "text" : "password"}
-                    autoComplete={method === "register" ? "new-password" : "current-password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    disabled={busy}
-                    placeholder={
-                      method === "register" ? `At least ${MIN_PASSWORD} characters` : "Your password"
-                    }
-                    className={`${inputClass} pr-16`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((s) => !s)}
-                    className="absolute inset-y-0 right-0 px-3 text-xs font-medium text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? "Hide" : "Show"}
-                  </button>
-                </div>
-              </div>
-
-              {method === "register" && (
-                <div>
-                  <label
-                    htmlFor="confirm"
-                    className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
-                  >
-                    Confirm password
-                  </label>
-                  <input
-                    id="confirm"
-                    type={showPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
-                    disabled={busy}
-                    placeholder="Re-enter your password"
-                    className={inputClass}
-                  />
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={busy}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {busy && <Spinner className="h-4 w-4" />}
-                {busy
-                  ? method === "register"
-                    ? "Creating account…"
-                    : "Logging in…"
-                  : method === "register"
-                    ? "Create account"
-                    : "Log in"}
-              </button>
-            </form>
-          )}
+            <button
+              type="submit"
+              disabled={busy}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy && <Spinner className="h-4 w-4" />}
+              {busy
+                ? method === "register"
+                  ? "Creating account…"
+                  : "Logging in…"
+                : method === "register"
+                  ? "Create account"
+                  : "Log in"}
+            </button>
+          </form>
 
           {/* Feedback alerts */}
           {error && (
@@ -440,12 +247,6 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
               className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300"
             >
               {error}
-            </div>
-          )}
-
-          {otpNotice && !error && otpStep === "verify" && (
-            <div className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
-              {otpNotice}
             </div>
           )}
         </div>
@@ -457,7 +258,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
               Already have an account?{" "}
               <button
                 type="button"
-                onClick={() => switchMethod("otp")}
+                onClick={() => switchMethod("password")}
                 className="font-medium text-indigo-700 hover:underline dark:text-indigo-400"
               >
                 Sign in

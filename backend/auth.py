@@ -1,28 +1,21 @@
-"""Account system: register / login / Email OTP / me.
+"""Account system: register / login / me.
 
 Supports:
 - Email + password with scrypt hashing
-- Passwordless 6-digit Email OTP login with SMTP delivery and dev fallback
-- Server-side rate limiting and resend cooldown enforcement
+- Server-side rate limiting and brute-force throttling
 - JWT sessions with 7-day TTL and constant-time comparisons
 """
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import re
 import secrets
-import smtplib
 import sqlite3
 import threading
 import time
-import urllib.error
-import urllib.request
 from contextlib import closing
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from typing import Optional
 
 import jwt
@@ -36,37 +29,11 @@ AUTH_DB_PATH = (os.getenv("AUTH_DB_PATH") or "./auth.db").strip()
 TOKEN_TTL_SECONDS = int((os.getenv("TOKEN_TTL_HOURS") or "168").strip()) * 3600  # 7 days
 MIN_PASSWORD_LEN = 8
 MAX_PASSWORD_LEN = 128
-OTP_TTL_SECONDS = 600  # 10 minutes
-OTP_RESEND_COOLDOWN = 30  # 30 seconds minimum between sends per email
-MAX_OTP_ATTEMPTS = 5
 
 JWT_SECRET = (os.getenv("JWT_SECRET") or os.getenv("AUTH_SECRET") or "").strip()
 if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
     logger.warning("JWT_SECRET is not set - using a temporary secret.")
-
-# SMTP Configuration Helper
-def get_smtp_config():
-    host = (os.getenv("SMTP_HOST") or os.getenv("MAIL_HOST") or os.getenv("SMTP_SERVER") or "").strip()
-    try:
-        port = int((os.getenv("SMTP_PORT") or os.getenv("MAIL_PORT") or "587").strip())
-    except ValueError:
-        port = 587
-    user = (os.getenv("SMTP_USER") or os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USERNAME") or "").strip()
-    raw_pass = (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_PASS") or os.getenv("MAIL_PASSWORD") or "").strip()
-    # Strip spaces from Gmail App Passwords (e.g. 'abcd efgh ijkl mnop' -> 'abcdefghijklmnop')
-    password = raw_pass.replace(" ", "") if ("gmail" in host.lower() or len(raw_pass.replace(" ", "")) == 16) else raw_pass
-    from_addr = (os.getenv("SMTP_FROM") or os.getenv("MAIL_FROM") or user or "noreply@docqa.app").strip()
-    missing = [k for k, v in [("SMTP_HOST", host), ("SMTP_USER", user), ("SMTP_PASSWORD", password)] if not v]
-    return {
-        "host": host,
-        "port": port,
-        "user": user,
-        "password": password,
-        "from": from_addr,
-        "is_configured": len(missing) == 0,
-        "missing": missing,
-    }
 
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
@@ -74,7 +41,7 @@ EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 _N, _R, _P = 2 ** 14, 8, 1
 
 # --------------------------------------------------------------------------- #
-# Storage & Database Migration
+# Storage & Database Initialization
 # --------------------------------------------------------------------------- #
 _db_lock = threading.Lock()
 
@@ -103,35 +70,10 @@ def init_db() -> None:
                    created_at REAL NOT NULL
                )"""
         )
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS email_otps (
-                   email TEXT PRIMARY KEY,
-                   otp_code TEXT NOT NULL,
-                   expires_at REAL NOT NULL,
-                   attempts INTEGER DEFAULT 0,
-                   created_at REAL NOT NULL,
-                   last_sent_at REAL DEFAULT 0
-               )"""
-        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_otps_expires ON email_otps(expires_at);")
-
-        # Handle backward-compatible migration for last_sent_at column
-        try:
-            conn.execute("ALTER TABLE email_otps ADD COLUMN last_sent_at REAL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  # column already exists
 
 
 init_db()
-
-
-def _cleanup_expired_otps(conn: sqlite3.Connection) -> None:
-    """Purge stale OTP records opportunistically."""
-    try:
-        conn.execute("DELETE FROM email_otps WHERE expires_at < ?", (time.time(),))
-    except Exception:
-        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -225,20 +167,6 @@ def create_token(user_id: int | str, email: str) -> str:
     )
 
 
-def _get_or_create_user(email: str) -> dict:
-    with _db_lock, closing(_connect()) as conn, conn:
-        row = conn.execute("SELECT id, email FROM users WHERE email = ?", (email,)).fetchone()
-        if row is not None:
-            return {"id": row["id"], "email": row["email"]}
-        # Create user with a secure random dummy password hash
-        dummy_hash = hash_password(secrets.token_urlsafe(32))
-        cursor = conn.execute(
-            "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
-            (email, dummy_hash, time.time()),
-        )
-        return {"id": cursor.lastrowid, "email": email}
-
-
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -276,258 +204,6 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
 
 
 # --------------------------------------------------------------------------- #
-# Email Dispatcher (HTTPS REST API + SMTP Fallback)
-# --------------------------------------------------------------------------- #
-def _send_via_resend(api_key: str, from_addr: str, to_addr: str, subject: str, html: str, text: str) -> tuple[bool, Optional[str]]:
-    try:
-        url = "https://api.resend.com/emails"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "DocQA-Auth/1.0",
-        }
-        sender = from_addr.strip() if (from_addr and "@" in from_addr and not any(from_addr.lower().endswith(d) for d in ["@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com"])) else "DocQ&A <onboarding@resend.dev>"
-        payload = {
-            "from": sender,
-            "to": [to_addr],
-            "subject": subject,
-            "html": html,
-            "text": text,
-            "headers": {
-                "X-Entity-Ref-ID": f"docqa-{int(time.time())}-{secrets.token_hex(4)}",
-                "Auto-Submitted": "auto-generated",
-                "X-Auto-Response-Suppress": "All",
-            },
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            resp_body = resp.read().decode("utf-8", errors="replace")
-            if resp.status in (200, 201):
-                logger.info("Sent OTP email via Resend to %s", to_addr)
-                return True, None
-            return False, f"Resend API returned status {resp.status}: {resp_body}"
-    except urllib.error.HTTPError as exc:
-        err_body = exc.read().decode("utf-8", errors="replace")
-        logger.exception("Resend API error: %s - %s", exc.code, err_body)
-        try:
-            parsed = json.loads(err_body)
-            msg = parsed.get("message") or parsed.get("error") or err_body
-        except Exception:
-            msg = err_body
-        return False, f"Resend API error ({exc.code}): {msg}"
-    except Exception as exc:
-        logger.exception("Resend failed: %s", exc)
-        return False, f"Resend delivery error: {str(exc)}"
-
-
-def _send_via_brevo(api_key: str, from_addr: str, to_addr: str, subject: str, html: str, text: str) -> tuple[bool, Optional[str]]:
-    try:
-        url = "https://api.brevo.com/v3/smtp/email"
-        headers = {
-            "api-key": api_key,
-            "Content-Type": "application/json",
-            "User-Agent": "DocQA-Auth/1.0",
-        }
-        sender_email = from_addr if "@" in from_addr else "noreply@docqa.app"
-        payload = {
-            "sender": {"name": "DocQ&A", "email": sender_email},
-            "to": [{"email": to_addr}],
-            "subject": subject,
-            "htmlContent": html,
-            "textContent": text,
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            if resp.status in (200, 201):
-                logger.info("Sent OTP email via Brevo to %s", to_addr)
-                return True, None
-            return False, f"Brevo API returned status {resp.status}"
-    except urllib.error.HTTPError as exc:
-        err_body = exc.read().decode("utf-8", errors="replace")
-        logger.exception("Brevo API error: %s - %s", exc.code, err_body)
-        try:
-            parsed = json.loads(err_body)
-            msg = parsed.get("message") or parsed.get("error") or err_body
-        except Exception:
-            msg = err_body
-        return False, f"Brevo API error ({exc.code}): {msg}"
-    except Exception as exc:
-        logger.exception("Brevo failed: %s", exc)
-        return False, f"Brevo delivery error: {str(exc)}"
-
-
-def _send_via_smtp(cfg: dict, recipient: str, subject: str, html: str, text: str) -> tuple[bool, Optional[str]]:
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        sender_header = cfg["from"] if "<" in cfg["from"] else f"DocQ&A <{cfg['from']}>"
-        msg["From"] = sender_header
-        msg["To"] = recipient
-        msg.attach(MIMEText(text, "plain"))
-        msg.attach(MIMEText(html, "html"))
-
-        if cfg["port"] == 465:
-            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=12) as server:
-                server.login(cfg["user"], cfg["password"])
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=12) as server:
-                server.starttls()
-                server.login(cfg["user"], cfg["password"])
-                server.send_message(msg)
-
-        logger.info("Sent OTP email successfully via SMTP to %s", recipient)
-        return True, None
-    except smtplib.SMTPAuthenticationError as exc:
-        logger.exception("SMTP authentication failed for %s: %s", recipient, exc)
-        return False, "SMTP authentication failed. Please verify your SMTP user and password/App Password."
-    except OSError as exc:
-        logger.exception("Network error sending OTP email to %s: %s", recipient, exc)
-        if "101" in str(exc) or "unreachable" in str(exc).lower():
-            return False, "Outbound SMTP ports (587/465) unreachable or blocked. Consider configuring RESEND_API_KEY with a verified domain or BREVO_API_KEY."
-        return False, f"SMTP network error: {str(exc)}"
-    except Exception as exc:
-        logger.exception("Failed to deliver OTP email via SMTP to %s: %s", recipient, exc)
-        return False, f"Email delivery error ({type(exc).__name__}): {str(exc)}"
-
-
-USER_DELIVERY_ERROR_MESSAGE = (
-    "Unable to deliver verification code. Please check that your email address is correct and try again, or contact support."
-)
-
-
-def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
-    """Send OTP code via HTTPS API (Resend/Brevo) or SMTP (local dev only).
-
-    Returns (success, internal_diagnostic_error).
-    Diagnostic errors are recorded in secure server logs and MUST NOT be exposed to end users.
-    """
-    logger.info("Sending OTP verification email to %s", recipient)
-
-    subject = "Your DocQ&A verification code"
-    text_content = (
-        f"Hello,\n\n"
-        f"Your verification code for DocQ&A is: {otp_code}\n\n"
-        f"This code will expire in 10 minutes.\n"
-        f"If you did not request this verification code, please ignore this email.\n\n"
-        f"— The DocQ&A Team"
-    )
-
-    html_content = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 36px 28px; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
-      <div style="margin-bottom: 24px;">
-        <span style="font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #4f46e5, #7c3aed); -webkit-background-clip: text; color: #4f46e5; letter-spacing: -0.5px;">⚡ DocQ&amp;A</span>
-      </div>
-      <h2 style="color: #0f172a; margin: 0 0 12px; font-size: 20px; font-weight: 700;">Sign in to your account</h2>
-      <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">Use the 6-digit one-time code below to verify your email and sign in:</p>
-      <div style="background: #f8fafc; border: 2px dashed #6366f1; border-radius: 12px; padding: 20px; text-align: center; margin: 0 0 24px;">
-        <span style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #1e1b4b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;">{otp_code}</span>
-      </div>
-      <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin: 0 0 16px;">This code is valid for <strong>10 minutes</strong>. For your security, never share this code with anyone.</p>
-      <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
-      <p style="color: #94a3b8; font-size: 12px; margin: 0;">If you did not request this email, you can safely disregard it.</p>
-    </div>
-    """
-
-    raw_resend = (
-        os.getenv("RESEND_API_KEY")
-        or os.getenv("resend_api_key")
-        or os.getenv("RESEND_KEY")
-        or ""
-    ).strip().strip('"').strip("'")
-    brevo_key = (os.getenv("BREVO_API_KEY") or "").strip()
-    smtp_cfg = get_smtp_config()
-
-    # 1. Resend HTTPS API (Recommended provider for cloud environments like Render, port 443)
-    if raw_resend:
-        custom_from = (os.getenv("RESEND_FROM") or "").strip().strip('"').strip("'")
-        if custom_from:
-            from_email = custom_from if "<" in custom_from else f"DocQ&A <{custom_from}>"
-        else:
-            from_email = "DocQ&A <onboarding@resend.dev>"
-        ok, err = _send_via_resend(raw_resend, from_email, recipient, subject, html_content, text_content)
-        if ok:
-            return True, None
-        logger.error("Resend API delivery failed for %s: %s", recipient, err)
-        return False, f"Resend API error: {err}"
-
-    # 2. Brevo HTTPS API (Alternative HTTPS provider over Port 443)
-    if brevo_key:
-        from_email = (os.getenv("BREVO_FROM") or os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "noreply@docqa.app").strip()
-        ok, err = _send_via_brevo(brevo_key, from_email, recipient, subject, html_content, text_content)
-        if ok:
-            return True, None
-        logger.error("Brevo API delivery failed for %s: %s", recipient, err)
-        return False, f"Brevo API error: {err}"
-
-    # 3. Standard SMTP (Only for environments where no HTTPS API is configured, e.g. local dev)
-    if smtp_cfg["is_configured"]:
-        ok, err = _send_via_smtp(smtp_cfg, recipient, subject, html_content, text_content)
-        if ok:
-            return True, None
-        logger.error("SMTP delivery failed for %s: %s", recipient, err)
-        return False, f"SMTP error: {err}"
-
-    logger.error("No email delivery provider configured. Set RESEND_API_KEY and RESEND_FROM in environment variables.")
-    return False, "No email provider configured."
-
-
-def _hash_otp(email: str, code: str) -> str:
-    """Store OTP as salted SHA-256 hash so raw codes never rest in the database."""
-    salt = JWT_SECRET[:16]
-    return hashlib.sha256(f"{salt}:{email.lower().strip()}:{code.strip()}".encode("utf-8")).hexdigest()
-
-
-def _verify_otp_code(email: str, candidate_code: str, stored: str) -> bool:
-    expected_hash = _hash_otp(email, candidate_code)
-    if hmac.compare_digest(stored, expected_hash):
-        return True
-    # Backward compatibility with legacy plaintext records
-    if hmac.compare_digest(stored, candidate_code.strip()):
-        return True
-    return False
-
-
-def _issue_and_send_otp(conn: sqlite3.Connection, email: str, now: float) -> tuple[bool, Optional[str]]:
-    """Check cooldown, generate secure OTP, record it, and send the email."""
-    existing = conn.execute(
-        "SELECT last_sent_at, expires_at FROM email_otps WHERE email = ?", (email,)
-    ).fetchone()
-
-    if existing:
-        last_sent = existing["last_sent_at"] or 0
-        elapsed = now - last_sent
-        if elapsed < OTP_RESEND_COOLDOWN:
-            remaining = int(OTP_RESEND_COOLDOWN - elapsed)
-            raise HTTPException(
-                429, f"Please wait {remaining} seconds before requesting a new code."
-            )
-
-    otp_code = f"{secrets.randbelow(1000000):06d}"
-    stored_hash = _hash_otp(email, otp_code)
-    expires_at = now + OTP_TTL_SECONDS
-
-    conn.execute(
-        """INSERT INTO email_otps (email, otp_code, expires_at, attempts, created_at, last_sent_at)
-           VALUES (?, ?, ?, 0, ?, ?)
-           ON CONFLICT(email) DO UPDATE SET
-               otp_code = excluded.otp_code,
-               expires_at = excluded.expires_at,
-               attempts = 0,
-               created_at = excluded.created_at,
-               last_sent_at = excluded.last_sent_at""",
-        (email, stored_hash, expires_at, now, now),
-    )
-
-    sent, diag_err = send_otp_email(email, otp_code)
-    if not sent:
-        # Delete unsent OTP record
-        conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
-        return False, diag_err
-    return True, None
-
-
-# --------------------------------------------------------------------------- #
 # Routes & Models
 # --------------------------------------------------------------------------- #
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -538,15 +214,6 @@ class Credentials(BaseModel):
     password: str
 
 
-class OtpSendRequest(BaseModel):
-    email: str
-
-
-class OtpVerifyRequest(BaseModel):
-    email: str
-    otp: str
-
-
 def _normalize_email(email: str) -> str:
     email = email.strip().lower()
     if len(email) > 254 or not EMAIL_RE.match(email):
@@ -554,7 +221,6 @@ def _normalize_email(email: str) -> str:
     return email
 
 
-# Standard Registration: creates account, requires OTP to establish session
 @router.post("/register")
 def register(body: Credentials, request: Request):
     email = _normalize_email(body.email)
@@ -570,35 +236,29 @@ def register(body: Credentials, request: Request):
     now = time.time()
     with _db_lock, closing(_connect()) as conn, conn:
         try:
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
                 (email, password_hash, now),
             )
+            user_id = cursor.lastrowid
         except sqlite3.IntegrityError:
             _record_failure(key)
             raise HTTPException(409, "An account with this email already exists. Try logging in.") from None
 
-        _cleanup_expired_otps(conn)
-        sent, diag_err = _issue_and_send_otp(conn, email, now)
-        if not sent:
-            # Roll back user creation so the email is not stranded
-            conn.execute("DELETE FROM users WHERE email = ?", (email,))
-            logger.error("Registration OTP send failed for %s: %s", email, diag_err)
-            raise HTTPException(
-                502,
-                USER_DELIVERY_ERROR_MESSAGE,
-            )
-
     _clear_failures(key)
+    user = {"id": user_id, "email": email}
+    token = create_token(user["id"], user["email"])
+    logger.info("User registered: %s", email)
+
     return {
-        "otp_required": True,
-        "message": f"Account created! Verification code sent to {email}. Please check your inbox.",
-        "expires_in": OTP_TTL_SECONDS,
-        "email": email,
+        "token": token,
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": TOKEN_TTL_SECONDS,
+        "user": user,
     }
 
 
-# Standard Password Login: verifies password, then requires OTP before session
 @router.post("/login")
 def login(body: Credentials, request: Request):
     email = _normalize_email(body.email)
@@ -616,100 +276,10 @@ def login(body: Credentials, request: Request):
         _record_failure(key)
         raise HTTPException(401, "Incorrect email or password.")
 
-    now = time.time()
-    with _db_lock, closing(_connect()) as conn, conn:
-        _cleanup_expired_otps(conn)
-        sent, diag_err = _issue_and_send_otp(conn, email, now)
-        if not sent:
-            logger.error("Login OTP send failed for %s: %s", email, diag_err)
-            raise HTTPException(
-                502,
-                USER_DELIVERY_ERROR_MESSAGE,
-            )
-
     _clear_failures(key)
-    return {
-        "otp_required": True,
-        "message": f"Password accepted. Verification code sent to {email}. Please check your inbox.",
-        "expires_in": OTP_TTL_SECONDS,
-        "email": email,
-    }
-
-
-# OTP: Request One-Time Passcode
-@router.post("/otp/send")
-def send_otp(body: OtpSendRequest, request: Request):
-    email = _normalize_email(body.email)
-    key = _throttle_key(f"otp:{email}", request)
-    _check_throttle(key)
-
-    now = time.time()
-    with _db_lock, closing(_connect()) as conn, conn:
-        _cleanup_expired_otps(conn)
-        sent, diag_err = _issue_and_send_otp(conn, email, now)
-        if not sent:
-            logger.error("OTP send failed for %s: %s", email, diag_err)
-            raise HTTPException(
-                502,
-                USER_DELIVERY_ERROR_MESSAGE,
-            )
-
-    return {
-        "message": f"Verification code sent to {email}. Please check your inbox.",
-        "expires_in": OTP_TTL_SECONDS,
-    }
-
-
-# OTP: Verify and Sign In (The ONLY endpoint that creates a session)
-@router.post("/otp/verify")
-def verify_otp(body: OtpVerifyRequest, request: Request):
-    email = _normalize_email(body.email)
-    code = body.otp.strip()
-    key = _throttle_key(f"otp:{email}", request)
-    _check_throttle(key)
-
-    if not code:
-        raise HTTPException(400, "Please enter the verification code.")
-
-    with _db_lock, closing(_connect()) as conn, conn:
-        row = conn.execute(
-            "SELECT otp_code, expires_at, attempts FROM email_otps WHERE email = ?",
-            (email,),
-        ).fetchone()
-
-        if row is None:
-            raise HTTPException(400, "No verification code requested for this email. Please request a new code.")
-
-        if time.time() > row["expires_at"]:
-            conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
-            raise HTTPException(400, "Verification code has expired. Please request a new one.")
-
-        if row["attempts"] >= MAX_OTP_ATTEMPTS:
-            conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
-            _record_failure(key)
-            raise HTTPException(429, "Too many incorrect attempts. Please request a new code.")
-
-        if not _verify_otp_code(email, code, row["otp_code"]):
-            new_attempts = row["attempts"] + 1
-            if new_attempts >= MAX_OTP_ATTEMPTS:
-                conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
-                _record_failure(key)
-                raise HTTPException(429, "Too many incorrect attempts. Please request a new code.")
-            conn.execute("UPDATE email_otps SET attempts = ? WHERE email = ?", (new_attempts, email))
-            _record_failure(key)
-            attempts_left = MAX_OTP_ATTEMPTS - new_attempts
-            raise HTTPException(
-                400,
-                f"Incorrect verification code. ({attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining)",
-            )
-
-        # OTP verified: delete it immediately to prevent replay attacks (usable once)
-        conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
-
-    _clear_failures(key)
-    user = _get_or_create_user(email)
+    user = {"id": row["id"], "email": row["email"]}
     token = create_token(user["id"], user["email"])
-    logger.info("User authenticated via OTP: %s", email)
+    logger.info("User logged in: %s", email)
 
     return {
         "token": token,

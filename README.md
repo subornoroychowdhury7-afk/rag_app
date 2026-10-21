@@ -36,7 +36,7 @@ DocQ&A solves every one of these.
 | **Scanned / image PDFs** | Crashes or returns blank | 3-tier ingestion: PyMuPDF → Tesseract OCR → Gemini Vision |
 | **Hallucination** | Answers even when docs don't contain the answer | Cosine distance gate (`≤ 0.65`) — refuses to answer if no relevant chunk found |
 | **Data privacy** | All users share one vector collection | Every chunk tagged with `user_id`; queries are strictly user-scoped |
-| **Authentication** | None, or dummy accounts | Mandatory 6-digit Email OTP on all sign-in paths + scrypt password verification + 7-day JWTs |
+| **Authentication** | None, or dummy accounts | Email + password authentication with scrypt hashing + 7-day JWT sessions |
 | **Cloud deployment** | Breaks on stateless servers | Switches between local HNSW and Chroma Cloud automatically |
 | **API failures** | Crashes on rate limits | Exponential backoff with 4 retries on every Gemini call |
 
@@ -73,7 +73,7 @@ Your Question
 - **🔍 3-Tier Resilient OCR** — Handles digital PDFs, scanned documents, and image-heavy files without manual configuration
 - **🛡️ Hallucination Gate** — Hard cutoff on cosine distance. The model never guesses when documents don't contain the answer
 - **🔐 Multi-Tenant Isolation** — Each user's documents are isolated at the vector metadata level; no cross-user data leakage
-- **✉️ Secure Email OTP Auth** — Mandatory 6-digit OTP verification across all login & registration paths (with 30s server-side cooldown, 5-attempt brute-force lockout, single-use expiry, and salted SHA-256 storage)
+- **🔐 Secure Email/Password Auth** — Email and password authentication with scrypt hashing, server-side brute-force rate limiting, and 7-day JWT sessions
 - **🔄 Hybrid Vector Backend** — Local ChromaDB for development, Chroma Cloud for stateless production — zero code change required
 - **📑 Source Citations** — Every answer includes the exact passage it was derived from, expandable inline
 
@@ -111,24 +111,6 @@ npm run dev                                     # http://localhost:3000
 ```
 GEMINI_API_KEY=...        # Required for embeddings + generation
 JWT_SECRET=...            # Any long random string
-
-# Email Provider (At least one provider required for OTP delivery)
-# Production on Render: Use Resend HTTPS API (Port 443).
-# Outbound SMTP (ports 25, 465, 587) is blocked by Render network policy.
-RESEND_API_KEY=re_...
-RESEND_FROM=DocQ&A <notifications@yourverifieddomain.com>
-
-# Note on Domain Verification:
-# To deliver OTP emails to all users, verify your sending domain at https://resend.com/domains
-# and configure RESEND_FROM to match your verified domain.
-# Without a verified domain, Resend test mode restricts sending strictly to your account owner email.
-
-# Local development alternative (if testing with SMTP on localhost):
-# SMTP_HOST=smtp.gmail.com
-# SMTP_PORT=587
-# SMTP_USER=your_email@gmail.com
-# SMTP_PASSWORD=your_16_character_app_password
-# SMTP_FROM=your_email@gmail.com
 ```
 
 ---
@@ -138,7 +120,7 @@ RESEND_FROM=DocQ&A <notifications@yourverifieddomain.com>
 | Service | Config |
 |:---|:---|
 | **Vercel** | Auto-deploys frontend on push to `main`. Set `NEXT_PUBLIC_API_URL` env var to your Render URL. |
-| **Render** | Uses `render.yaml` + `backend/Dockerfile`. Set `GEMINI_API_KEY`, `JWT_SECRET`, `RESEND_API_KEY`, and `RESEND_FROM` (with your verified domain) in Render dashboard. |
+| **Render** | Uses `render.yaml` + `backend/Dockerfile`. Set `GEMINI_API_KEY` and `JWT_SECRET` in Render dashboard. |
 
 ---
 
