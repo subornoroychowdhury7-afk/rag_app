@@ -391,8 +391,17 @@ def _send_via_smtp(cfg: dict, recipient: str, subject: str, html: str, text: str
         return False, f"Email delivery error ({type(exc).__name__}): {str(exc)}"
 
 
+USER_DELIVERY_ERROR_MESSAGE = (
+    "Unable to deliver verification code. Please check that your email address is correct and try again, or contact support."
+)
+
+
 def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
-    """Send OTP code via HTTPS API (Resend/Brevo) or SMTP fallback."""
+    """Send OTP code via HTTPS API (Resend/Brevo) or SMTP (local dev only).
+
+    Returns (success, internal_diagnostic_error).
+    Diagnostic errors are recorded in secure server logs and MUST NOT be exposed to end users.
+    """
     logger.info("Sending OTP verification email to %s", recipient)
 
     subject = "Your DocQ&A verification code"
@@ -429,51 +438,38 @@ def send_otp_email(recipient: str, otp_code: str) -> tuple[bool, Optional[str]]:
     brevo_key = (os.getenv("BREVO_API_KEY") or "").strip()
     smtp_cfg = get_smtp_config()
 
-    attempted_errors: list[str] = []
-
-    # 1. Resend HTTPS API
+    # 1. Resend HTTPS API (Recommended provider for cloud environments like Render, port 443)
     if raw_resend:
         custom_from = (os.getenv("RESEND_FROM") or "").strip().strip('"').strip("'")
-        from_email = custom_from if (custom_from and "@" in custom_from) else "DocQ&A <onboarding@resend.dev>"
+        if custom_from:
+            from_email = custom_from if "<" in custom_from else f"DocQ&A <{custom_from}>"
+        else:
+            from_email = "DocQ&A <onboarding@resend.dev>"
         ok, err = _send_via_resend(raw_resend, from_email, recipient, subject, html_content, text_content)
         if ok:
             return True, None
-        attempted_errors.append(f"Resend error: {err}")
-        # If SMTP is configured, attempt fallback
-        if smtp_cfg["is_configured"]:
-            logger.warning("Resend delivery failed; attempting SMTP fallback for %s...", recipient)
-            s_ok, s_err = _send_via_smtp(smtp_cfg, recipient, subject, html_content, text_content)
-            if s_ok:
-                return True, None
-            attempted_errors.append(f"SMTP fallback error: {s_err}")
-        return False, " | ".join(attempted_errors)
+        logger.error("Resend API delivery failed for %s: %s", recipient, err)
+        return False, f"Resend API error: {err}"
 
-    # 2. Brevo HTTPS API
+    # 2. Brevo HTTPS API (Alternative HTTPS provider over Port 443)
     if brevo_key:
         from_email = (os.getenv("BREVO_FROM") or os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "noreply@docqa.app").strip()
         ok, err = _send_via_brevo(brevo_key, from_email, recipient, subject, html_content, text_content)
         if ok:
             return True, None
-        attempted_errors.append(f"Brevo error: {err}")
-        if smtp_cfg["is_configured"]:
-            logger.warning("Brevo delivery failed; attempting SMTP fallback for %s...", recipient)
-            s_ok, s_err = _send_via_smtp(smtp_cfg, recipient, subject, html_content, text_content)
-            if s_ok:
-                return True, None
-            attempted_errors.append(f"SMTP fallback error: {s_err}")
-        return False, " | ".join(attempted_errors)
+        logger.error("Brevo API delivery failed for %s: %s", recipient, err)
+        return False, f"Brevo API error: {err}"
 
-    # 3. SMTP configuration
+    # 3. Standard SMTP (Only for environments where no HTTPS API is configured, e.g. local dev)
     if smtp_cfg["is_configured"]:
-        return _send_via_smtp(smtp_cfg, recipient, subject, html_content, text_content)
+        ok, err = _send_via_smtp(smtp_cfg, recipient, subject, html_content, text_content)
+        if ok:
+            return True, None
+        logger.error("SMTP delivery failed for %s: %s", recipient, err)
+        return False, f"SMTP error: {err}"
 
-    # No email provider configured
-    missing_vars = ", ".join(smtp_cfg["missing"])
-    logger.warning("No email provider configured. Missing variables: %s", missing_vars)
-    return False, (
-        f"Email service is not configured on the server. Please set RESEND_API_KEY (with a verified RESEND_FROM domain) "
-        f"or SMTP credentials ({missing_vars}) in environment variables."
-    )
+    logger.error("No email delivery provider configured. Set RESEND_API_KEY and RESEND_FROM in environment variables.")
+    return False, "No email provider configured."
 
 
 def _hash_otp(email: str, code: str) -> str:
@@ -523,11 +519,11 @@ def _issue_and_send_otp(conn: sqlite3.Connection, email: str, now: float) -> tup
         (email, stored_hash, expires_at, now, now),
     )
 
-    sent, err = send_otp_email(email, otp_code)
+    sent, diag_err = send_otp_email(email, otp_code)
     if not sent:
         # Delete unsent OTP record
         conn.execute("DELETE FROM email_otps WHERE email = ?", (email,))
-        return False, err
+        return False, diag_err
     return True, None
 
 
@@ -583,13 +579,14 @@ def register(body: Credentials, request: Request):
             raise HTTPException(409, "An account with this email already exists. Try logging in.") from None
 
         _cleanup_expired_otps(conn)
-        sent, err = _issue_and_send_otp(conn, email, now)
+        sent, diag_err = _issue_and_send_otp(conn, email, now)
         if not sent:
             # Roll back user creation so the email is not stranded
             conn.execute("DELETE FROM users WHERE email = ?", (email,))
+            logger.error("Registration OTP send failed for %s: %s", email, diag_err)
             raise HTTPException(
                 502,
-                f"Could not deliver verification email: {err}"
+                USER_DELIVERY_ERROR_MESSAGE,
             )
 
     _clear_failures(key)
@@ -622,11 +619,12 @@ def login(body: Credentials, request: Request):
     now = time.time()
     with _db_lock, closing(_connect()) as conn, conn:
         _cleanup_expired_otps(conn)
-        sent, err = _issue_and_send_otp(conn, email, now)
+        sent, diag_err = _issue_and_send_otp(conn, email, now)
         if not sent:
+            logger.error("Login OTP send failed for %s: %s", email, diag_err)
             raise HTTPException(
                 502,
-                f"Password accepted, but verification email could not be delivered: {err}"
+                USER_DELIVERY_ERROR_MESSAGE,
             )
 
     _clear_failures(key)
@@ -648,11 +646,12 @@ def send_otp(body: OtpSendRequest, request: Request):
     now = time.time()
     with _db_lock, closing(_connect()) as conn, conn:
         _cleanup_expired_otps(conn)
-        sent, err = _issue_and_send_otp(conn, email, now)
+        sent, diag_err = _issue_and_send_otp(conn, email, now)
         if not sent:
+            logger.error("OTP send failed for %s: %s", email, diag_err)
             raise HTTPException(
                 502,
-                f"Could not deliver verification email: {err}"
+                USER_DELIVERY_ERROR_MESSAGE,
             )
 
     return {

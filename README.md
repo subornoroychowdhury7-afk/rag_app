@@ -113,11 +113,17 @@ GEMINI_API_KEY=...        # Required for embeddings + generation
 JWT_SECRET=...            # Any long random string
 
 # Email Provider (At least one provider required for OTP delivery)
-# Option A - Resend HTTPS (Recommended for Render, works over 443):
+# Production on Render: Use Resend HTTPS API (Port 443).
+# Outbound SMTP (ports 25, 465, 587) is blocked by Render network policy.
 RESEND_API_KEY=re_...
 RESEND_FROM=DocQ&A <notifications@yourverifieddomain.com>
 
-# Option B - Standard SMTP (Gmail App Password, etc.):
+# Note on Domain Verification:
+# To deliver OTP emails to all users, verify your sending domain at https://resend.com/domains
+# and configure RESEND_FROM to match your verified domain.
+# Without a verified domain, Resend test mode restricts sending strictly to your account owner email.
+
+# Local development alternative (if testing with SMTP on localhost):
 # SMTP_HOST=smtp.gmail.com
 # SMTP_PORT=587
 # SMTP_USER=your_email@gmail.com
@@ -132,7 +138,7 @@ RESEND_FROM=DocQ&A <notifications@yourverifieddomain.com>
 | Service | Config |
 |:---|:---|
 | **Vercel** | Auto-deploys frontend on push to `main`. Set `NEXT_PUBLIC_API_URL` env var to your Render URL. |
-| **Render** | Uses `render.yaml` + `backend/Dockerfile`. Set `GEMINI_API_KEY`, `JWT_SECRET`, and SMTP vars in Render dashboard. |
+| **Render** | Uses `render.yaml` + `backend/Dockerfile`. Set `GEMINI_API_KEY`, `JWT_SECRET`, `RESEND_API_KEY`, and `RESEND_FROM` (with your verified domain) in Render dashboard. |
 
 ---
 

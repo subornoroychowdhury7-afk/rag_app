@@ -122,7 +122,9 @@ class AuthFlowTestCase(unittest.TestCase):
         res = self.client.post("/auth/otp/send", json={"email": "fail@example.com"})
         self.assertEqual(res.status_code, 502)
         detail = res.json().get("detail", "")
-        self.assertIn("The domain is not verified", detail)
+        self.assertEqual(detail, auth.USER_DELIVERY_ERROR_MESSAGE)
+        self.assertNotIn("Resend", detail)
+        self.assertNotIn("resend.com", detail)
         # Verify no fake sandbox mode or demo OTP
         self.assertNotIn("demo_otp", res.json())
         self.assertNotIn("is_sandbox", res.json())
