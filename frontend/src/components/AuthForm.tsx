@@ -23,7 +23,6 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
   const [otpCode, setOtpCode] = useState("");
   const [otpNotice, setOtpNotice] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
-  const [sandboxCode, setSandboxCode] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,7 +44,6 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
     setOtpCode("");
     setOtpStep("request");
     setOtpNotice(null);
-    setSandboxCode(null);
   }
 
   // Handle OTP Send
@@ -65,14 +63,8 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
       const res = await sendOtp(cleanEmail);
       setOtpStep("verify");
       setOtpNotice(res.message);
+      setOtpCode("");
       setResendCooldown(30);
-      if (res.demo_otp) {
-        setSandboxCode(res.demo_otp);
-        setOtpCode(res.demo_otp);
-      } else {
-        setSandboxCode(null);
-        setOtpCode("");
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send verification code.");
     } finally {
@@ -88,7 +80,7 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanOtp = otpCode.trim();
-    if (!cleanOtp) {
+    if (!cleanOtp || cleanOtp.length < 6) {
       setError("Please enter the 6-digit verification code.");
       return;
     }
@@ -132,7 +124,13 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
         method === "register"
           ? await register(cleanEmail, password)
           : await login(cleanEmail, password);
-      onAuthed(res.user);
+
+      // Password accepted / registered -> require email OTP to establish session
+      setMethod("otp");
+      setOtpStep("verify");
+      setOtpCode("");
+      setOtpNotice(res.message);
+      setResendCooldown(30);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed. Please check your credentials.");
     } finally {
@@ -286,26 +284,12 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
                     </button>
                   </div>
 
-                  {sandboxCode ? (
-                    <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/90 p-3 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-                      <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <div>
-                        <p className="font-semibold">Demo Sandbox Mode Active</p>
-                        <p className="mt-0.5 text-amber-800 dark:text-amber-300">
-                          Resend is in testing sandbox mode. Your verification code is prefilled: <strong className="font-mono text-sm tracking-wider font-bold text-amber-950 dark:text-amber-100">{sandboxCode}</strong>.
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/70 p-2.5 text-xs text-indigo-900 dark:border-indigo-900/40 dark:bg-indigo-950/40 dark:text-indigo-300">
-                      <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <span>Check your <strong>Spam</strong> or <strong>Promotions</strong> folder if the email doesn't appear in your Primary inbox within a few seconds.</span>
-                    </div>
-                  )}
+                  <div className="flex items-start gap-2 rounded-lg border border-indigo-100 bg-indigo-50/70 p-2.5 text-xs text-indigo-900 dark:border-indigo-900/40 dark:bg-indigo-950/40 dark:text-indigo-300">
+                    <svg className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Check your <strong>Spam</strong> or <strong>Promotions</strong> folder if the email doesn't appear in your Primary inbox within a few seconds.</span>
+                  </div>
 
                   <div>
                     <label

@@ -148,35 +148,28 @@ function jsonPost(body: unknown): RequestInit {
   };
 }
 
-export async function login(email: string, password: string): Promise<AuthResult> {
+export type LoginOrRegisterResult = {
+  otp_required: boolean;
+  message: string;
+  expires_in?: number;
+  email: string;
+};
+
+export async function login(email: string, password: string): Promise<LoginOrRegisterResult> {
   const cleanEmail = email.trim().toLowerCase();
-  const res = await request<any>("/auth/login", jsonPost({ email: cleanEmail, password }), false);
-  const token = res.token || res.access_token;
-  if (!token) throw new Error("Login failed: No authentication token received.");
-  const user: AuthUser = res.user?.email
-    ? { id: res.user.id, email: res.user.email }
-    : { email: cleanEmail };
-  setAuthSession(token, user.email);
-  return { token, user, access_token: token };
+  return request<LoginOrRegisterResult>("/auth/login", jsonPost({ email: cleanEmail, password }), false);
 }
 
-export async function register(email: string, password: string): Promise<AuthResult> {
+export async function register(email: string, password: string): Promise<LoginOrRegisterResult> {
   const cleanEmail = email.trim().toLowerCase();
-  const res = await request<any>("/auth/register", jsonPost({ email: cleanEmail, password }), false);
-  const token = res.token || res.access_token;
-  if (!token) throw new Error("Registration failed: No authentication token received.");
-  const user: AuthUser = res.user?.email
-    ? { id: res.user.id, email: res.user.email }
-    : { email: cleanEmail };
-  setAuthSession(token, user.email);
-  return { token, user, access_token: token };
+  return request<LoginOrRegisterResult>("/auth/register", jsonPost({ email: cleanEmail, password }), false);
 }
 
 export async function sendOtp(
   email: string
-): Promise<{ message: string; expires_in: number; demo_otp?: string; is_sandbox?: boolean }> {
+): Promise<{ message: string; expires_in: number }> {
   const cleanEmail = email.trim().toLowerCase();
-  return request<{ message: string; expires_in: number; demo_otp?: string; is_sandbox?: boolean }>(
+  return request<{ message: string; expires_in: number }>(
     "/auth/otp/send",
     jsonPost({ email: cleanEmail }),
     false,
