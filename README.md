@@ -1,129 +1,120 @@
-# ⚡ DocQ&A — Enterprise RAG Platform
+# DocQ&A
 
-<div align="center">
+**Turn your documents into a searchable, conversational knowledge base.** Upload a PDF, text, or Markdown file, ask questions in plain language, and get answers grounded in retrieved passages with source citations.
 
-**A production-grade document intelligence system. Upload any PDF, ask anything, get strictly grounded answers with verified citations.**
+[![Live demo](https://img.shields.io/badge/Live%20Demo-Open-black?style=for-the-badge&logo=vercel)](https://rag-app-blush.vercel.app)
+[![API health](https://img.shields.io/badge/API-Health%20check-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=for-the-badge&logo=vercel)](https://rag-app-blush.vercel.app)
-[![Backend](https://img.shields.io/badge/API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js%2016-000000?style=for-the-badge&logo=next.js)](https://nextjs.org)
-[![Gemini](https://img.shields.io/badge/Gemini%202.5-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
-[![ChromaDB](https://img.shields.io/badge/ChromaDB-FF6B6B?style=for-the-badge)](https://www.trychroma.com)
+## What you can do
 
-</div>
+- Create an account and keep each user's document collection scoped to that account.
+- Upload PDF, TXT, and Markdown files (20 MB maximum by default). PDFs use embedded text where available, with OCR for scanned pages.
+- Ask questions across your library or focus a conversation on one selected document.
+- Review the passages and source files behind an answer, request an executive summary, or remove a document.
+- Switch between light and dark themes.
 
----
+## How it works
 
-## The Problem with Typical RAG Projects
-
-Most open-source RAG demos you find online share the same fatal flaws:
-
-- ❌ **Break on scanned PDFs** — naive text extraction fails on images and receipts  
-- ❌ **Hallucinate freely** — blindly inject top-*K* chunks regardless of relevance  
-- ❌ **Mix everyone's data** — one shared vector index for all users  
-- ❌ **No real auth** — hardcoded secrets or no login at all  
-- ❌ **Brittle deployment** — local-only indices that break in stateless cloud environments  
-
-DocQ&A solves every one of these.
-
----
-
-## What Makes This Different
-
-| Problem | Standard RAG | DocQ&A |
-|:---|:---|:---|
-| **Scanned / image PDFs** | Crashes or returns blank | 3-tier ingestion: PyMuPDF → Tesseract OCR → Gemini Vision |
-| **Hallucination** | Answers even when docs don't contain the answer | Cosine distance gate (`≤ 0.65`) — refuses to answer if no relevant chunk found |
-| **Data privacy** | All users share one vector collection | Every chunk tagged with `user_id`; queries are strictly user-scoped |
-| **Authentication** | None, or dummy accounts | Email + password authentication with scrypt hashing + 7-day JWT sessions |
-| **Cloud deployment** | Breaks on stateless servers | Switches between local HNSW and Chroma Cloud automatically |
-| **API failures** | Crashes on rate limits | Exponential backoff with 4 retries on every Gemini call |
-
----
-
-## How It Works
-
-```
-Your PDF
-   │
-   ├─ 1. EXTRACT  ─ PyMuPDF (digital) → Tesseract OCR (scanned) → Gemini Vision (fallback)
-   │
-   ├─ 2. CHUNK    ─ Overlapping 1,800-char windows (10% overlap to preserve context)
-   │
-   ├─ 3. EMBED    ─ gemini-embedding-2 → 768-dim vectors, batched in parallel
-   │
-   └─ 4. STORE    ─ ChromaDB with user_id metadata for strict tenant isolation
-
-Your Question
-   │
-   ├─ 1. EMBED    ─ Same model, retrieval_query task type
-   │
-   ├─ 2. SEARCH   ─ Cosine similarity against YOUR chunks only
-   │
-   ├─ 3. GATE     ─ Distance > 0.65? Stop. Return "I cannot answer." (no LLM call)
-   │
-   └─ 4. GENERATE ─ Gemini 2.5 Flash answers strictly from retrieved passages + citations
+```mermaid
+flowchart LR
+  A[PDF / TXT / Markdown] --> B[Extract text and OCR scanned PDF pages]
+  B --> C[Chunk with overlap]
+  C --> D[Gemini embeddings]
+  D --> E[(ChromaDB, tagged by user)]
+  Q[Question] --> R[Embed and retrieve relevant passages]
+  E --> R
+  R --> G[Gemini answer with citations]
 ```
 
----
+For questions, the backend searches only the signed-in user's indexed content. It applies a relevance cutoff before generation and returns a grounded fallback when no passages qualify. The frontend is a Next.js app; the FastAPI service handles authentication, ingestion, retrieval, summaries, and document management.
 
-## Core Features
+## Run locally
 
-- **🔍 3-Tier Resilient OCR** — Handles digital PDFs, scanned documents, and image-heavy files without manual configuration
-- **🛡️ Hallucination Gate** — Hard cutoff on cosine distance. The model never guesses when documents don't contain the answer
-- **🔐 Multi-Tenant Isolation** — Each user's documents are isolated at the vector metadata level; no cross-user data leakage
-- **🔐 Secure Email/Password Auth** — Email and password authentication with scrypt hashing, server-side brute-force rate limiting, and 7-day JWT sessions
-- **🔄 Hybrid Vector Backend** — Local ChromaDB for development, Chroma Cloud for stateless production — zero code change required
-- **📑 Source Citations** — Every answer includes the exact passage it was derived from, expandable inline
+You’ll need Python 3.12, Node.js with npm, and a [Google Gemini API key](https://ai.google.dev/gemini-api/docs/api-key). Tesseract OCR is optional; scanned PDFs can use Gemini transcription when Tesseract is unavailable.
 
----
+### 1. Start the backend
 
-## Tech Stack
-
-```
-Frontend        Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4
-Backend         FastAPI · Uvicorn · PyMuPDF · Tesseract OCR · Pillow
-AI & Vectors    Gemini 2.5 Flash · gemini-embedding-2 (768-dim) · ChromaDB
-Auth & Storage  PyJWT (HS256) · scrypt · SQLite 3 (WAL mode)
-Deployment      Vercel (frontend) · Render Docker (backend)
-```
-
----
-
-## Local Setup
-
-```bash
-# Backend
+```powershell
 cd backend
-python -m venv venv && venv\Scripts\activate    # Windows
-pip install -r requirements.txt
-cp .env.example .env                            # Add GEMINI_API_KEY
-uvicorn main:app --reload
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
 
-# Frontend
+Set `GEMINI_API_KEY` and a long, random `JWT_SECRET` in `backend/.env`, then run:
+
+```powershell
+uvicorn main:app --reload
+```
+
+The API will be available at `http://localhost:8000`; interactive API docs are at `http://localhost:8000/docs`.
+
+### 2. Start the frontend
+
+In a second terminal:
+
+```powershell
 cd frontend
 npm install
-npm run dev                                     # http://localhost:3000
 ```
 
-**Minimum required env vars:**
-```
-GEMINI_API_KEY=...        # Required for embeddings + generation
-JWT_SECRET=...            # Any long random string
+Create `frontend/.env.local` with:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
----
+Then start Next.js:
+
+```powershell
+npm run dev
+```
+
+Open `http://localhost:3000`, register, and upload a document to begin.
+
+## Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `GEMINI_API_KEY` | Required for embeddings, answers, summaries, and Gemini PDF OCR fallback. |
+| `JWT_SECRET` | Secret used to sign login tokens; use a private, persistent value. |
+| `NEXT_PUBLIC_API_URL` | Backend URL used by the frontend. |
+| `CHROMA_PATH`, `AUTH_DB_PATH` | Local vector-store and SQLite account database paths (defaults: `./chroma_db` and `./auth.db`). |
+| `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `GENERATION_MODEL` | Gemini model settings; defaults are in `backend/.env.example`. |
+| `MAX_UPLOAD_MB`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `MAX_DISTANCE` | Optional ingestion and retrieval tuning; defaults: `20`, `1800`, `180`, and `0.65`. |
+| `TOKEN_TTL_HOURS`, `ALLOWED_ORIGINS` | Optional session lifetime and CORS settings; defaults: `168` hours and `*`. |
+
+For Chroma Cloud, configure `CHROMA_API_KEY`, `CHROMA_TENANT`, and `CHROMA_DATABASE` on the backend. When using local storage in a hosted environment, attach persistent storage for both the vector database and SQLite account database so data survives restarts and redeploys.
+
+## API overview
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/auth/register`, `/auth/login` | Create an account or start a session. |
+| `GET` | `/auth/me`, `/documents` | Check the session and list indexed files. |
+| `POST` | `/upload` | Ingest a supported document. |
+| `POST` | `/chat` | Retrieve relevant passages and answer a question. |
+| `POST` | `/documents/{filename}/summarize` | Generate a document briefing. |
+| `DELETE` | `/documents/{filename}` | Delete a document from the signed-in user's index. |
+| `GET` | `/health` | Check backend availability. |
+
+All document and chat endpoints require a Bearer token. FastAPI's interactive schema is available at `/docs` when the backend is running.
 
 ## Deployment
 
-| Service | Config |
-|:---|:---|
-| **Vercel** | Auto-deploys frontend on push to `main`. Set `NEXT_PUBLIC_API_URL` env var to your Render URL. |
-| **Render** | Uses `render.yaml` + `backend/Dockerfile`. Set `GEMINI_API_KEY` and `JWT_SECRET` in Render dashboard. |
+The frontend can be deployed to Vercel and the API to Render using `render.yaml` and `backend/Dockerfile`. Set `NEXT_PUBLIC_API_URL` on the frontend to the deployed API URL, and configure the Gemini and authentication secrets on the backend. Configure persistent storage for local SQLite/Chroma data, or use Chroma Cloud for vectors.
 
----
+## Project layout
 
-## License
+```text
+backend/    FastAPI API, authentication, document processing, and vector search
+frontend/   Next.js App Router interface
+render.yaml Render service definition
+```
 
-MIT
+## Contributing
+
+Keep changes focused, update this README when setup or behavior changes, and run the relevant frontend lint/build or backend checks before opening a pull request. Never commit API keys, `.env` files, account databases, or local vector-store data.
