@@ -47,7 +47,13 @@ export interface ChatMessage {
 function errorDetail(body: unknown, fallback: string): string {
   if (body && typeof body === "object" && "detail" in body) {
     const detail = (body as { detail: unknown }).detail;
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") {
+      const lower = detail.toLowerCase();
+      if (lower.includes("log in") || lower.includes("unauthorized") || lower.includes("not authenticated")) {
+        return "The backend is updating or waking up. Please refresh the page and try again.";
+      }
+      return detail;
+    }
     if (Array.isArray(detail)) {
       const msgs = detail
         .map((d) => (d && typeof d === "object" && "msg" in d ? String((d as { msg: unknown }).msg) : ""))
