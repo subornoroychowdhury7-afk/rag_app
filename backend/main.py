@@ -52,14 +52,28 @@ EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
 # Generation model
 GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-2.5-flash").strip()
-generation_model = genai.GenerativeModel(GENERATION_MODEL)
+
+# Generation config: high token limit + extended thinking for deeper, more
+# accurate answers. thinking_budget enables Gemini 2.5 Flash's reasoning mode.
+_generation_config = genai.types.GenerationConfig(
+    max_output_tokens=8192,
+    temperature=1,          # Required to be 1 when thinking is enabled
+)
+try:
+    generation_model = genai.GenerativeModel(
+        GENERATION_MODEL,
+        generation_config=_generation_config,
+    )
+except Exception:
+    generation_model = genai.GenerativeModel(GENERATION_MODEL)
 
 CHUNK_SIZE = int((os.getenv("CHUNK_SIZE") or "1800").strip())
-CHUNK_OVERLAP = int((os.getenv("CHUNK_OVERLAP") or "180").strip())
-TOP_K = 5
+CHUNK_OVERLAP = int((os.getenv("CHUNK_OVERLAP") or "300").strip())
+TOP_K = 10                  # Retrieve more chunks for richer context
 
 # Cosine distance cutoff (0 = identical, ~1 = unrelated).
-MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.65").strip())
+# 0.75 is more permissive so borderline-relevant chunks aren't discarded.
+MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.75").strip())
 
 MAX_UPLOAD_MB = int((os.getenv("MAX_UPLOAD_MB") or "20").strip())
 MAX_QUERY_CHARS = 2000
@@ -68,21 +82,39 @@ MAX_RETRIES = 4
 
 NO_ANSWER = "I cannot answer this based on the uploaded documents."
 
-PROMPT_TEMPLATE = """You are a helpful and precise assistant. Answer the user's question using ONLY the provided context.
-If the answer is not in the context, say 'I cannot answer this based on the uploaded documents.'
-Do not use outside knowledge.
+PROMPT_TEMPLATE = """You are a highly knowledgeable academic and technical expert. \
+Answer the user's question using ONLY the provided context excerpts from their uploaded documents.
 
-Context:
+If the answer cannot be found in the context, say exactly: \
+'I cannot answer this based on the uploaded documents.'
+
+Do NOT use any outside knowledge beyond what is in the context below.
+
+Context (from uploaded documents):
 {context_string}
 
 User Question: {query}
 
-Guidelines:
-- Give a direct, well-structured answer with clean formatting (bullet points, bold highlights) where appropriate.
-- If the question can be answered from context, you may optionally append 2 to 3 concise, relevant follow-up questions the user might want to explore, in this exact format at the very end:
+Answer Requirements:
+1. Be THOROUGH and DETAILED — do not give a short or vague answer if the context supports a longer one.
+2. STRUCTURE your response clearly:
+   - Use markdown headings (##, ###) to organise multi-part answers.
+   - Use numbered steps for procedures or derivations.
+   - Use bullet points for lists of facts, properties, or items.
+   - Use **bold** for key terms, definitions, or important values.
+3. SHOW YOUR WORKING for any mathematical or logical reasoning:
+   - Write all math in LaTeX: inline as $...$ and display equations as $$...$$.
+   - Show each step of a derivation or calculation explicitly.
+   - Define all variables and symbols used.
+4. QUOTE or PARAPHRASE the relevant passage from the context to justify your answer.
+5. If multiple parts of the context are relevant, synthesise them into a cohesive answer.
+6. If the context only partially answers the question, answer what you can and clearly state what is missing.
+
+After your answer, if the question was answerable, append EXACTLY this block:
 FOLLOW_UPS:
 - [Follow-up question 1]?
 - [Follow-up question 2]?
+- [Follow-up question 3]?
 """
 
 # --------------------------------------------------------------------------- #
