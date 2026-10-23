@@ -1,6 +1,8 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 
 interface MarkdownRendererProps {
   content: string;
@@ -9,7 +11,16 @@ interface MarkdownRendererProps {
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <div className="prose-sm max-w-none">
+      {/*
+        katex/dist/katex.min.css is imported globally in layout.tsx.
+        This style tag handles display-math overflow on narrow screens so
+        wide matrices/equations scroll horizontally instead of breaking out.
+      */}
+      <style>{`.katex-display { overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }`}</style>
+
       <ReactMarkdown
+        remarkPlugins={[remarkMath]}
+        rehypePlugins={[[rehypeKatex, { strict: false, trust: false }]]}
         components={{
           h1: ({ children }) => (
             <h1 className="mb-3 mt-4 text-xl font-bold first:mt-0">{children}</h1>
