@@ -1,7 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 chromadb
-google-generativeai
+google-generativeai<0.9
 google-api-core
 python-multipart
 pymupdf
@@ -9,4 +9,6 @@ pytesseract
 pillow
 python-dotenv
 httpx
+httpx2
 pytest
+pytest-anyio

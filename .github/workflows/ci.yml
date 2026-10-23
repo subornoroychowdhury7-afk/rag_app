@@ -22,6 +22,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
         run: |
@@ -33,7 +34,10 @@ jobs:
           GEMINI_API_KEY: "placeholder-for-ci-tests-only"
           CHROMA_PATH: "/tmp/chroma_ci"
         run: |
-          python -m pytest test_api.py -v
+          python -m pytest test_api.py -v \
+            -W ignore::DeprecationWarning \
+            -W ignore::FutureWarning \
+            --tb=short
 
   frontend-check:
     name: Frontend Lint & Build
@@ -59,6 +63,8 @@ jobs:
         run: npm run lint
 
       - name: Run build
+        env:
+          NEXT_PUBLIC_API_URL: "https://rag-app-1-rqg6.onrender.com"
         run: npm run build
 
   docker-validate:
@@ -71,8 +77,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build backend Docker container
-        uses: docker/build-push-action@v5
+      - name: Build backend Docker container (no push)
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./backend/Dockerfile
