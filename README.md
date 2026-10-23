@@ -7,7 +7,7 @@
 [![API Health](https://img.shields.io/badge/API-Health_Check-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
 [![CI Status](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/subornoroychowdhury7-afk/rag_app/actions)
 [![Deploy Status](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/deploy.yml?branch=main&style=for-the-badge&label=Deploy)](https://github.com/subornoroychowdhury7-afk/rag_app/actions)
-[![Next.js](https://img.shields.io/badge/Next.js-15-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Python_3.12-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-FF6B35?style=for-the-badge)](https://www.trychroma.com)
 [![Gemini](https://img.shields.io/badge/Google_Gemini-AI-4285F4?style=for-the-badge&logo=google)](https://ai.google.dev)
@@ -51,7 +51,7 @@ flowchart LR
 
 **Backend** — FastAPI handles document ingestion, chunking, embedding, retrieval, summarization, and Gemini generation. Local ChromaDB persists the vector store; Chroma Cloud is also supported.
 
-**Frontend** — Next.js 15 App Router with TypeScript communicates with the FastAPI service via a typed API client.
+**Frontend** — Next.js 16 App Router with TypeScript communicates with the FastAPI service via a typed API client.
 
 ---
 
@@ -238,3 +238,4 @@ rag-app/
 2. Run backend tests (`python -m unittest discover -s backend`) and frontend lint + build (`npm run lint && npm run build` inside `frontend/`) before opening a PR.
 3. Update this README if setup steps, environment variables, or API behaviour changes.
 4. Never commit API keys, `.env` files, database files (`*.db`), or local vector-store data (`chroma_db/`).
+
