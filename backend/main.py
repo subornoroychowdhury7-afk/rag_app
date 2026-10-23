@@ -382,8 +382,9 @@ def health():
 
 @app.post("/upload")
 def upload(file: UploadFile = File(...)):
-    require_api_key()
-
+    # Validate file format and content BEFORE checking API key so that
+    # bad-request errors are always returned as 400, even in environments
+    # where GEMINI_API_KEY is not configured.
     filename = sanitize_filename(file.filename or "")
     lower_name = filename.lower()
     valid_exts = (".pdf", ".txt", ".md", ".markdown")
@@ -396,6 +397,8 @@ def upload(file: UploadFile = File(...)):
         raise HTTPException(413, f"File exceeds maximum upload size of {MAX_UPLOAD_MB} MB.")
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
+
+    require_api_key()
 
     started_at = time.perf_counter()
     if lower_name.endswith((".txt", ".md", ".markdown")):
