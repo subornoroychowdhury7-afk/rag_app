@@ -186,7 +186,7 @@ export async function register(email: string, password: string): Promise<AuthRes
 
 export async function getMe(): Promise<{ user: AuthUser }> {
   try {
-    const res = await request<any>("/auth/me", { method: "GET" });
+    const res = await request<{ user?: AuthUser; email?: string; id?: string }>("/auth/me", { method: "GET" });
     if (res && res.user && res.user.email) {
       return { user: res.user };
     }

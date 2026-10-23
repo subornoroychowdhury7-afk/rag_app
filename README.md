@@ -2,8 +2,10 @@
 
 **Turn your documents into a searchable, conversational knowledge base.** Upload a PDF, text, or Markdown file, ask questions in plain language, and get answers grounded in retrieved passages with source citations.
 
-[![Live demo](https://img.shields.io/badge/Live%20Demo-Open-black?style=for-the-badge&logo=vercel)](https://rag-app-blush.vercel.app)
+[![Vercel Live](https://img.shields.io/badge/Vercel-Live_Demo-black?style=for-the-badge&logo=vercel)](https://rag-app-blush.vercel.app)
+[![GitHub Pages](https://img.shields.io/badge/GitHub_Pages-Demo-24292e?style=for-the-badge&logo=github)](https://subornoroychowdhury7-afk.github.io/rag_app/)
 [![API health](https://img.shields.io/badge/API-Health%20check-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
+[![Build & Deploy](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/deploy.yml?branch=main&style=for-the-badge&label=Build%20%26%20Deploy)](https://github.com/subornoroychowdhury7-afk/rag_app/actions)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 
@@ -105,7 +107,25 @@ All document and chat endpoints require a Bearer token. FastAPI's interactive sc
 
 ## Deployment
 
-The frontend can be deployed to Vercel and the API to Render using `render.yaml` and `backend/Dockerfile`. Set `NEXT_PUBLIC_API_URL` on the frontend to the deployed API URL, and configure the Gemini and authentication secrets on the backend. Configure persistent storage for local SQLite/Chroma data, or use Chroma Cloud for vectors.
+### 1. GitHub Pages (Frontend)
+The frontend can be deployed directly to GitHub Pages via the included GitHub Actions workflow (`.github/workflows/deploy.yml`):
+1. In your GitHub repository, navigate to **Settings** > **Pages**.
+2. Under **Build and deployment** > **Source**, choose **GitHub Actions**.
+3. Push to `main` (or run the workflow manually under **Actions** > **Deploy**).
+4. Your frontend will be live at `https://<username>.github.io/<repo>/` and preconfigured to communicate with the Render API.
+
+### 2. Render (Backend API)
+The FastAPI backend is deployed using `render.yaml` and `backend/Dockerfile`:
+- Connect your GitHub repository on [Render](https://render.com) using the Blueprint option or Web Service.
+- Set `GEMINI_API_KEY` and any desired authentication secrets.
+- Initial owner account is automatically seeded on startup so account access persists even across free-tier container restarts.
+
+### 3. Vercel (Frontend Alternative)
+The Next.js frontend can also be deployed to [Vercel](https://vercel.com). Configure `NEXT_PUBLIC_API_URL` to point to your live Render backend URL (`https://rag-app-1-rqg6.onrender.com`).
+
+### 4. GitHub Actions CI/CD
+- **`.github/workflows/ci.yml`**: Runs full backend test suites (`test_auth_flow.py`), frontend linting, Next.js build verification, and Docker validation on pull requests and pushes.
+- **`.github/workflows/deploy.yml`**: Automatically deploys the frontend to GitHub Pages, publishes backend Docker images to GitHub Container Registry (GHCR), and triggers Render redeployments via webhook when `RENDER_DEPLOY_HOOK_URL` is set in repository secrets.
 
 ## Project layout
 

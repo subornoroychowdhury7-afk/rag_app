@@ -244,9 +244,25 @@ export default function AuthForm({ onAuthed }: { onAuthed: (user: AuthUser) => v
           {error && (
             <div
               role="alert"
-              className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300"
+              className="mt-4 rounded-lg bg-red-50 p-3 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300"
             >
-              {error}
+              <p>{error}</p>
+              {method === "password" && (
+                <p className="mt-1.5 text-slate-600 dark:text-slate-400">
+                  If this is a new deployment or you haven&apos;t created an account yet,{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      switchMethod("register");
+                      setConfirm(password);
+                    }}
+                    className="font-semibold text-indigo-600 underline hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+                  >
+                    click here to register
+                  </button>{" "}
+                  with these credentials.
+                </p>
+              )}
             </div>
           )}
         </div>

@@ -57,6 +57,15 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# Default owner account seed (ensures Render restarts or fresh databases keep access)
+_DEFAULT_SEEDS = [
+    (
+        "subornoroychowdhury7@gmail.com",
+        "scrypt$16384$8$1$63b7506f012f18a5f4af5606e5b07344$ab460540dd08d33d896e5d707b1da109b533fc03406162dbedc16dba82bb810f",
+    )
+]
+
+
 def init_db() -> None:
     directory = os.path.dirname(os.path.abspath(AUTH_DB_PATH))
     if directory:
@@ -71,6 +80,28 @@ def init_db() -> None:
                )"""
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);")
+
+        # Ensure owner and default accounts are seeded if missing
+        now = time.time()
+        for seed_email, seed_hash in _DEFAULT_SEEDS:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+                    (seed_email, seed_hash, now),
+                )
+            except Exception:
+                pass
+
+        initial_email = (os.getenv("INITIAL_USER_EMAIL") or "").strip().lower()
+        initial_pwd = os.getenv("INITIAL_USER_PASSWORD") or ""
+        if initial_email and initial_pwd:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+                    (initial_email, hash_password(initial_pwd), now),
+                )
+            except Exception as e:
+                logger.warning("Could not seed initial user from env: %s", e)
 
 
 init_db()

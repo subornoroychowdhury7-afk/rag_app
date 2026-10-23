@@ -31,21 +31,28 @@ export default function Home() {
 
   /* ---- Restore saved session on first load ---- */
   useEffect(() => {
+    let cancelled = false;
     const token = getToken();
     if (!token) {
-      setAuthChecked(true);
-      return;
+      queueMicrotask(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
 
     // Quick initial populate from token so UI renders fast
     const quickUser = getUserFromToken(token);
     if (quickUser) {
-      setUser(quickUser);
+      queueMicrotask(() => {
+        if (!cancelled) setUser(quickUser);
+      });
     }
 
     getMe()
       .then((res) => {
-        if (res?.user) {
+        if (!cancelled && res?.user) {
           setUser(res.user);
         }
       })
@@ -54,10 +61,16 @@ export default function Home() {
         // If token has expired or is invalid, clear it
         if (!quickUser) {
           logout();
-          setUser(null);
+          if (!cancelled) setUser(null);
         }
       })
-      .finally(() => setAuthChecked(true));
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /* ---- Listen for auth expiration or manual change ---- */
@@ -107,8 +120,10 @@ export default function Home() {
     const stored = localStorage.getItem("theme");
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     if (stored === "dark" || (!stored && prefersDark)) {
-      setDarkMode(true);
-      document.documentElement.classList.add("dark");
+      queueMicrotask(() => {
+        setDarkMode(true);
+        document.documentElement.classList.add("dark");
+      });
     }
   }, []);
 

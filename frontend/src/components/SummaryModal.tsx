@@ -23,14 +23,20 @@ export default function SummaryModal({
 
   useEffect(() => {
     if (!filename) {
-      setSummaryData(null);
-      setError(null);
+      queueMicrotask(() => {
+        setSummaryData(null);
+        setError(null);
+      });
       return;
     }
 
     let isMounted = true;
-    setLoading(true);
-    setError(null);
+    queueMicrotask(() => {
+      if (isMounted) {
+        setLoading(true);
+        setError(null);
+      }
+    });
 
     summarizeDocument(filename)
       .then((res) => {

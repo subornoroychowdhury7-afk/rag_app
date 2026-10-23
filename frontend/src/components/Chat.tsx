@@ -178,9 +178,30 @@ function formatTime(date: Date): string {
 
 const MAX_CHARS = 2000;
 
+interface SpeechRecognitionEventLike {
+  results?: {
+    [index: number]: {
+      [index: number]: {
+        transcript?: string;
+      };
+    };
+  };
+}
+
+interface SpeechRecognitionInstanceLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: () => void;
+  onresult: (event: SpeechRecognitionEventLike) => void;
+  onerror: (event: { error?: string }) => void;
+  onend: () => void;
+  start: () => void;
+  stop: () => void;
+}
+
 export default function Chat({
   hasDocs,
-  docs = [],
   selectedDocFilter,
   onSelectDocFilter,
 }: ChatProps) {
@@ -193,7 +214,7 @@ export default function Chat({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstanceLike | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -219,8 +240,14 @@ export default function Chat({
       return;
     }
 
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const win = typeof window !== "undefined"
+      ? (window as unknown as {
+          SpeechRecognition?: new () => SpeechRecognitionInstanceLike;
+          webkitSpeechRecognition?: new () => SpeechRecognitionInstanceLike;
+        })
+      : {};
+
+    const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       alert("Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.");
@@ -237,14 +264,14 @@ export default function Chat({
         setIsListening(true);
       };
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event: SpeechRecognitionEventLike) => {
         const transcript = event.results?.[0]?.[0]?.transcript;
         if (transcript) {
           setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
         }
       };
 
-      recognition.onerror = (event: any) => {
+      recognition.onerror = (event: { error?: string }) => {
         console.warn("Speech recognition error:", event.error);
         setIsListening(false);
       };
