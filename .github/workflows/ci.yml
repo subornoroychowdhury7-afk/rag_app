@@ -34,10 +34,7 @@ jobs:
           GEMINI_API_KEY: "placeholder-for-ci-tests-only"
           CHROMA_PATH: "/tmp/chroma_ci"
         run: |
-          python -m pytest test_api.py -v \
-            -W ignore::DeprecationWarning \
-            -W ignore::FutureWarning \
-            --tb=short
+          python -m pytest test_api.py -v -p no:warnings --tb=short
 
   frontend-check:
     name: Frontend Lint & Build
