@@ -29,8 +29,11 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run unit tests
+        env:
+          GEMINI_API_KEY: "placeholder-for-ci-tests-only"
+          CHROMA_PATH: "/tmp/chroma_ci"
         run: |
-          python -m unittest discover -s .
+          python -m pytest test_api.py -v
 
   frontend-check:
     name: Frontend Lint & Build

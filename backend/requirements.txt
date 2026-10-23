@@ -2,9 +2,11 @@ fastapi
 uvicorn
 chromadb
 google-generativeai
+google-api-core
 python-multipart
 pymupdf
 pytesseract
 pillow
 python-dotenv
 httpx
+pytest
