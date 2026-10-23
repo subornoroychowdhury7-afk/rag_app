@@ -1,96 +1,119 @@
-﻿# DocQ&A
+﻿<div align="center">
 
-**Turn any document into a conversational knowledge base.** Upload a PDF, text file, or Markdown file, ask questions in plain English, and get answers grounded in retrieved passages — with source citations and suggested follow-up questions.
+# 📄 DocQ&A
 
-[![Live Demo](https://img.shields.io/badge/Vercel-Live_Demo-black?style=for-the-badge&logo=vercel)](https://rag-app-blush.vercel.app)
-[![GitHub Pages](https://img.shields.io/badge/GitHub_Pages-Demo-24292e?style=for-the-badge&logo=github)](https://subornoroychowdhury7-afk.github.io/rag_app/)
-[![API Health](https://img.shields.io/badge/API-Health_Check-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
-[![CI Status](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/subornoroychowdhury7-afk/rag_app/actions)
-[![Deploy Status](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/deploy.yml?branch=main&style=for-the-badge&label=Deploy)](https://github.com/subornoroychowdhury7-afk/rag_app/actions)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
+### *Turn any document into a conversational knowledge base — powered by Gemini AI*
+
+<br/>
+
+[![Live Demo](https://img.shields.io/badge/🚀_Live_Demo-Vercel-black?style=for-the-badge&logo=vercel&logoColor=white)](https://rag-app-blush.vercel.app)
+[![GitHub Pages](https://img.shields.io/badge/📄_GitHub_Pages-Demo-24292e?style=for-the-badge&logo=github)](https://subornoroychowdhury7-afk.github.io/rag_app/)
+[![API Health](https://img.shields.io/badge/💚_API-Health_Check-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://rag-app-1-rqg6.onrender.com/health)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/ci.yml?branch=main&style=for-the-badge&label=CI&logo=github-actions&logoColor=white)](https://github.com/subornoroychowdhury7-afk/rag_app/actions/workflows/ci.yml)
+[![Deploy](https://img.shields.io/github/actions/workflow/status/subornoroychowdhury7-afk/rag_app/deploy.yml?branch=main&style=for-the-badge&label=Deploy&logo=github-actions&logoColor=white)](https://github.com/subornoroychowdhury7-afk/rag_app/actions/workflows/deploy.yml)
+[![Next.js 16](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Python_3.12-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
+[![Gemini AI](https://img.shields.io/badge/Gemini_AI-Powered-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-FF6B35?style=for-the-badge)](https://www.trychroma.com)
-[![Gemini](https://img.shields.io/badge/Google_Gemini-AI-4285F4?style=for-the-badge&logo=google)](https://ai.google.dev)
+
+<br/>
+
+> **No sign-in. No setup friction. Upload a document and start asking questions in seconds.**
+
+</div>
 
 ---
 
-## Features
+## ✨ What is DocQ&A?
 
-| Feature | Details |
-|---|---|
-| Multi-format uploads | PDF (embedded text + OCR fallback), TXT, and Markdown up to 20 MB |
-| Semantic search | Gemini embeddings + ChromaDB cosine similarity retrieval |
-| Conversational Q&A | Ask follow-up questions; session history is preserved |
-| Source citations | Every answer links the exact document passages it used |
-| Document-scoped chat | Ask across your full library or focus on a single file |
-| Executive summaries | One-click AI briefing with key highlights and recommendations |
-| Dark / light mode | System preference detected automatically |
-| No sign-in required | Open to all; no account needed |
+DocQ&A is a **Retrieval-Augmented Generation (RAG)** application that lets you chat with your documents using natural language. Drop in a research paper, legal contract, technical manual, or any text-heavy file — and instantly get accurate, cited answers powered by Google's Gemini AI.
+
+Every answer is **grounded in your documents** with source citations and relevance scores, so you always know exactly where the information comes from.
 
 ---
 
-## Architecture
+## 🎯 Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **📁 Multi-Format Upload** | PDF (with OCR fallback for scanned pages), plain text, and Markdown — up to 20 MB |
+| **💬 Conversational Q&A** | Full multi-turn chat history with context-aware follow-up suggestions |
+| **📌 Source Citations** | Every answer includes the source document, chunk text, and a relevance percentage |
+| **🔍 Document Focus** | Ask across your entire library or pin the conversation to one specific document |
+| **📊 Executive Summaries** | One-click AI briefings with highlights, takeaways, and recommended follow-ups |
+| **🗑️ Document Management** | List, inspect chunk counts, and permanently delete indexed documents |
+| **🌓 Theme Toggle** | Full light and dark mode support |
+| **⚡ Zero Auth Friction** | No account, no sign-in — open the app and go |
+
+---
+
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
-  subgraph Ingestion
-    A[PDF / TXT / MD] --> B[Extract text\nPyMuPDF + OCR]
-    B --> C[Chunk with overlap]
-    C --> D[Gemini embeddings]
-    D --> E[(ChromaDB)]
-  end
-  subgraph Query
-    Q[User question] --> R[Embed query]
-    R --> S[Cosine similarity search]
-    E --> S
-    S --> T{Relevance cutoff}
-    T -->|Passes| G[Gemini answer with citations]
-    T -->|Fails| F[Grounded fallback reply]
-  end
+    subgraph Ingestion
+        A["📄 PDF / TXT / Markdown"] --> B["Extract Text + OCR"]
+        B --> C["Chunk with Overlap"]
+        C --> D["Gemini Embedding API"]
+        D --> E[("ChromaDB\nVector Store")]
+    end
+
+    subgraph Retrieval["Retrieval & Generation"]
+        Q["❓ User Question"] --> R["Embed Query"]
+        R --> S["Cosine Similarity Search"]
+        E --> S
+        S --> T{"Relevance\nCutoff"}
+        T -->|Pass| G["Gemini Generation\nwith Citations"]
+        T -->|Fail| F["Grounded Fallback"]
+    end
+
+    subgraph Frontend
+        G --> UI["Next.js App\nCitations · Summaries · History"]
+        F --> UI
+    end
 ```
 
-**Backend** — FastAPI handles document ingestion, chunking, embedding, retrieval, summarization, and Gemini generation. Local ChromaDB persists the vector store; Chroma Cloud is also supported.
-
-**Frontend** — Next.js 16 App Router with TypeScript communicates with the FastAPI service via a typed API client.
+**The pipeline:**
+1. Documents are **chunked with overlap** (default 1 800 chars / 180 overlap) to preserve context at boundaries.
+2. Each chunk is vectorised using **`models/gemini-embedding-2`** (768 dimensions).
+3. At query time the question is embedded and top-K chunks are retrieved by **cosine similarity**.
+4. A **relevance cutoff** (default 0.65) ensures only truly relevant passages reach the model.
+5. Gemini generates a grounded answer — if no chunks qualify, a graceful fallback is returned instead of a hallucination.
 
 ---
 
-## Run Locally
+## 🚀 Live Deployments
 
-### Prerequisites
+| Surface | URL | Notes |
+|---------|-----|-------|
+| **Frontend (Vercel)** | [rag-app-blush.vercel.app](https://rag-app-blush.vercel.app) | Primary production frontend |
+| **Frontend (GitHub Pages)** | [subornoroychowdhury7-afk.github.io/rag_app](https://subornoroychowdhury7-afk.github.io/rag_app/) | Static export, auto-deployed on push |
+| **Backend API (Render)** | [rag-app-1-rqg6.onrender.com](https://rag-app-1-rqg6.onrender.com) | FastAPI + ChromaDB |
+| **API Docs (Swagger)** | [/docs](https://rag-app-1-rqg6.onrender.com/docs) | Interactive OpenAPI spec |
+| **Container (GHCR)** | `ghcr.io/subornoroychowdhury7-afk/rag_app/backend:latest` | Published on every push to `main` |
 
-- Python 3.12
-- Node.js 20 with npm
-- A [Google Gemini API key](https://ai.google.dev/gemini-api/docs/api-key)
-- _(Optional)_ Tesseract OCR — if absent, Gemini handles scanned PDF transcription automatically
+---
 
-### 1. Backend
+## 🛠️ Run Locally
+
+**Prerequisites:** Python 3.12, Node.js ≥ 20, and a [Google Gemini API key](https://ai.google.dev/gemini-api/docs/api-key).  
+Tesseract OCR is optional — scanned PDFs automatically fall back to Gemini's native PDF transcription when Tesseract is not found.
+
+### 1 · Backend
 
 ```powershell
 cd backend
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-```
-
-Open `backend/.env` and set your API key:
-
-```env
-GEMINI_API_KEY=your_key_here
-```
-
-Start the server:
-
-```powershell
+pip install -r requirements.txt
+Copy-Item .env.example .env   # then set GEMINI_API_KEY inside .env
 uvicorn main:app --reload
 ```
 
-The API is now live at `http://localhost:8000`. Interactive Swagger docs are at `http://localhost:8000/docs`.
+API available at **`http://localhost:8000`** · Swagger docs at **`http://localhost:8000/docs`**.
 
-### 2. Frontend
-
-Open a **second terminal**:
+### 2 · Frontend
 
 ```powershell
 cd frontend
@@ -103,139 +126,124 @@ Create `frontend/.env.local`:
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-Start the dev server:
-
 ```powershell
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), upload a document, and start chatting.
+Open **`http://localhost:3000`**, upload a document, and start asking questions.
 
 ---
 
-## Configuration Reference
+## ⚙️ Configuration Reference
 
 ### Backend (`backend/.env`)
 
-| Variable | Default | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | _(required)_ | Powers embeddings, generation, summaries, and Gemini OCR fallback |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEMINI_API_KEY` | **required** | Embeddings, generation, and Gemini OCR fallback |
 | `EMBEDDING_MODEL` | `models/gemini-embedding-2` | Gemini embedding model |
-| `EMBEDDING_DIM` | `768` | Output vector dimensions |
-| `GENERATION_MODEL` | `gemini-2.5-flash` | Gemini generation model |
-| `CHUNK_SIZE` | `1800` | Characters per chunk during ingestion |
-| `CHUNK_OVERLAP` | `180` | Character overlap between adjacent chunks |
-| `MAX_DISTANCE` | `0.65` | Cosine distance cutoff — passages above this are discarded |
-| `MAX_UPLOAD_MB` | `20` | Maximum accepted file size in megabytes |
-| `CHROMA_PATH` | `./chroma_db` | Local ChromaDB persistence directory |
-| `ALLOWED_ORIGINS` | `*` | CORS allowed origins (comma-separated for multiple) |
-
-#### Chroma Cloud (optional)
-
-Set these three variables to switch from local ChromaDB to Chroma Cloud:
-
-```env
-CHROMA_API_KEY=...
-CHROMA_TENANT=...
-CHROMA_DATABASE=...
-```
+| `EMBEDDING_DIM` | `768` | Output dimensionality |
+| `GENERATION_MODEL` | `gemini-2.5-flash` | Answer and summary generation |
+| `CHUNK_SIZE` | `1800` | Characters per chunk |
+| `CHUNK_OVERLAP` | `180` | Overlap between adjacent chunks |
+| `MAX_DISTANCE` | `0.65` | Cosine distance cutoff (0 = identical) |
+| `MAX_UPLOAD_MB` | `20` | Maximum file upload size |
+| `CHROMA_PATH` | `./chroma_db` | Local vector store path |
+| `CHROMA_API_KEY` | *(optional)* | Enables Chroma Cloud mode |
+| `CHROMA_TENANT` | *(optional)* | Chroma Cloud tenant |
+| `CHROMA_DATABASE` | *(optional)* | Chroma Cloud database |
+| `ALLOWED_ORIGINS` | `*` | CORS allowed origins |
 
 ### Frontend (`frontend/.env.local`)
 
-| Variable | Description |
-|---|---|
-| `NEXT_PUBLIC_API_URL` | Full URL of the FastAPI backend |
+| Variable | Purpose |
+|----------|---------|
+| `NEXT_PUBLIC_API_URL` | Backend base URL |
+| `NEXT_PUBLIC_BASE_PATH` | Base path for GitHub Pages (set automatically in CI) |
 
 ---
 
-## API Reference
+## 📡 API Reference
 
 | Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Service health and Gemini key status |
+|--------|----------|-------------|
+| `GET` | `/health` | Backend and configuration health check |
 | `GET` | `/documents` | List all indexed documents with chunk counts |
 | `POST` | `/upload` | Ingest a PDF, TXT, or Markdown file |
-| `POST` | `/chat` | Answer a question using retrieved context |
-| `POST` | `/documents/{filename}/summarize` | Generate an executive AI briefing |
-| `DELETE` | `/documents/{filename}` | Remove a document from the vector store |
+| `POST` | `/chat` | Retrieve relevant passages and generate a cited answer |
+| `POST` | `/documents/{filename}/summarize` | Generate an executive AI briefing for a document |
+| `DELETE` | `/documents/{filename}` | Remove a document and all its chunks from the index |
 
-Full interactive schema available at `/docs` (Swagger UI) or `/redoc` when the backend is running.
+Full interactive schema at [`/docs`](https://rag-app-1-rqg6.onrender.com/docs).
 
 ---
 
-## Deployment
+## 🚢 Deployment Guide
 
-### GitHub Pages — Frontend
+### GitHub Pages (Frontend)
+1. Go to **Settings → Pages** in your repository.
+2. Under **Build and deployment → Source**, select **GitHub Actions**.
+3. Push to `main` or trigger the **Deploy** workflow manually.
+4. The frontend builds as a static export and deploys to `https://<username>.github.io/<repo>/`.
 
-1. Go to your repository **Settings > Pages**.
-2. Under **Build and deployment > Source**, select **GitHub Actions**.
-3. Push to `main` or trigger the workflow manually under **Actions > Deploy**.
-4. The frontend will be published to `https://<username>.github.io/<repo>/`.
+### Render (Backend)
+1. Connect your repository on [Render](https://render.com) via the **Blueprint** option (`render.yaml`) or a **Web Service** pointing to `backend/Dockerfile`.
+2. Add `GEMINI_API_KEY` as an environment variable in the Render dashboard.
+3. Add `RENDER_DEPLOY_HOOK_URL` as a GitHub repository secret to trigger Render redeploys from CI.
 
-### Render — Backend API
-
-1. Connect your repository on [Render](https://render.com) using **New > Blueprint** — this reads `render.yaml` automatically.
-2. Set the `GEMINI_API_KEY` environment variable in the Render dashboard.
-3. Render builds the Docker image from `backend/Dockerfile` on every push to `main`.
-
-### Vercel — Frontend Alternative
-
-Import the repository on [Vercel](https://vercel.com) and set `NEXT_PUBLIC_API_URL` to your Render backend URL (e.g. `https://rag-app-1-rqg6.onrender.com`). Vercel handles builds and deploys automatically.
+### Vercel (Frontend Alternative)
+Import the repository on [Vercel](https://vercel.com), set the root directory to `frontend`, and configure:
+- `NEXT_PUBLIC_API_URL` → your Render backend URL
 
 ### GitHub Actions CI/CD
 
-| Workflow | Trigger | What it does |
-|---|---|---|
-| `ci.yml` | Push / PR to `main` | Backend unit tests, frontend ESLint + build, Docker build validation |
-| `deploy.yml` | Push to `main` | Deploys to GitHub Pages, pushes Docker image to GHCR, optionally triggers Render and Vercel redeploys |
-
-**Repository secrets used:** `RENDER_DEPLOY_HOOK_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `NEXT_PUBLIC_API_URL`
+| Workflow | Trigger | Jobs |
+|----------|---------|------|
+| **`ci.yml`** | Push & PR to `main` | Backend unit tests · Frontend lint & build · Docker validation |
+| **`deploy.yml`** | Push to `main` | Deploy to GitHub Pages · Publish image to GHCR · Trigger Render webhook |
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
-```
+```text
 rag-app/
 ├── backend/
 │   ├── main.py              # FastAPI app — ingestion, retrieval, generation
+│   ├── test_api.py          # Unit tests (unittest + FastAPI TestClient)
+│   ├── Dockerfile           # Production container (python:3.12-slim + Tesseract)
 │   ├── requirements.txt     # Python dependencies
-│   ├── Dockerfile           # Container definition for Render / GHCR
-│   ├── .env.example         # Environment variable template
-│   └── test_api.py          # Backend unit tests
+│   └── .env.example         # Environment variable template
 ├── frontend/
 │   ├── src/
-│   │   ├── app/             # Next.js App Router pages and layouts
-│   │   ├── components/      # React UI components
-│   │   └── lib/             # API client and utilities
-│   ├── next.config.ts       # Next.js configuration
+│   │   ├── app/             # Next.js App Router pages
+│   │   ├── components/      # Chat, Header, DocumentList, etc.
+│   │   └── lib/             # API client and type definitions
+│   ├── next.config.ts       # Next.js config (static export support)
 │   └── package.json
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml           # Continuous integration
 │       └── deploy.yml       # Continuous deployment
-├── render.yaml              # Render Blueprint service definition
+├── render.yaml              # Render service definition
 └── README.md
 ```
 
 ---
 
-## Troubleshooting
+## 🤝 Contributing
 
-| Symptom | Likely Cause | Fix |
-|---|---|---|
-| `GEMINI_API_KEY is not configured` in logs | Missing or placeholder key | Set `GEMINI_API_KEY` in `backend/.env` |
-| Upload returns 422 "No extractable text" | Scanned PDF, no embedded text, no Tesseract | Install Tesseract or ensure your Gemini API key is valid (Gemini handles OCR fallback) |
-| CORS errors in the browser | `ALLOWED_ORIGINS` does not include the frontend URL | Add your frontend origin to `ALLOWED_ORIGINS` in the backend env |
-| GitHub Pages shows a blank page | Static export or base path not configured | Ensure `OUTPUT_EXPORT=true` during build and Pages source is set to **GitHub Actions** |
-| Render cold-start delay | Free-tier instance sleeps after inactivity | Expected on the Render free plan; the first request wakes the service |
+1. Fork the repository and create a feature branch.
+2. Run backend tests: `python -m unittest discover -s backend`
+3. Run frontend checks: `cd frontend && npm run lint && npm run build`
+4. Open a pull request — CI validates your changes automatically.
+
+> **Never commit** API keys, `.env` files, or local vector store data (`chroma_db/`).
 
 ---
 
-## Contributing
+<div align="center">
 
-1. Fork the repository and create a feature branch.
-2. Run backend tests (`python -m unittest discover -s backend`) and frontend lint + build (`npm run lint && npm run build` inside `frontend/`) before opening a PR.
-3. Update this README if setup steps, environment variables, or API behaviour changes.
-4. Never commit API keys, `.env` files, database files (`*.db`), or local vector-store data (`chroma_db/`).
+Built with ❤️ using **Next.js 16 · FastAPI · ChromaDB · Google Gemini AI**
 
+</div>
