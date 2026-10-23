@@ -11,7 +11,7 @@
 
 ## What you can do
 
-- Create an account and keep each user's document collection scoped to that account.
+- Instantly start exploring: no sign-in or registration required.
 - Upload PDF, TXT, and Markdown files (20 MB maximum by default). PDFs use embedded text where available, with OCR for scanned pages.
 - Ask questions across your library or focus a conversation on one selected document.
 - Review the passages and source files behind an answer, request an executive summary, or remove a document.
@@ -24,13 +24,13 @@ flowchart LR
   A[PDF / TXT / Markdown] --> B[Extract text and OCR scanned PDF pages]
   B --> C[Chunk with overlap]
   C --> D[Gemini embeddings]
-  D --> E[(ChromaDB, tagged by user)]
+  D --> E[(ChromaDB Knowledge Base)]
   Q[Question] --> R[Embed and retrieve relevant passages]
   E --> R
   R --> G[Gemini answer with citations]
 ```
 
-For questions, the backend searches only the signed-in user's indexed content. It applies a relevance cutoff before generation and returns a grounded fallback when no passages qualify. The frontend is a Next.js app; the FastAPI service handles authentication, ingestion, retrieval, summaries, and document management.
+The backend searches your indexed content, applies a relevance cutoff before generation, and returns a grounded fallback when no passages qualify. The frontend is a Next.js App Router app; the FastAPI service handles ingestion, retrieval, summaries, and document management.
 
 ## Run locally
 
@@ -46,7 +46,7 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Set `GEMINI_API_KEY` and a long, random `JWT_SECRET` in `backend/.env`, then run:
+Set `GEMINI_API_KEY` in `backend/.env`, then run:
 
 ```powershell
 uvicorn main:app --reload
@@ -75,35 +75,33 @@ Then start Next.js:
 npm run dev
 ```
 
-Open `http://localhost:3000`, register, and upload a document to begin.
+Open `http://localhost:3000` and upload a document to begin.
 
 ## Configuration
 
 | Variable | Purpose |
 | --- | --- |
 | `GEMINI_API_KEY` | Required for embeddings, answers, summaries, and Gemini PDF OCR fallback. |
-| `JWT_SECRET` | Secret used to sign login tokens; use a private, persistent value. |
 | `NEXT_PUBLIC_API_URL` | Backend URL used by the frontend. |
-| `CHROMA_PATH`, `AUTH_DB_PATH` | Local vector-store and SQLite account database paths (defaults: `./chroma_db` and `./auth.db`). |
+| `CHROMA_PATH` | Local vector-store path (default: `./chroma_db`). |
 | `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `GENERATION_MODEL` | Gemini model settings; defaults are in `backend/.env.example`. |
 | `MAX_UPLOAD_MB`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `MAX_DISTANCE` | Optional ingestion and retrieval tuning; defaults: `20`, `1800`, `180`, and `0.65`. |
-| `TOKEN_TTL_HOURS`, `ALLOWED_ORIGINS` | Optional session lifetime and CORS settings; defaults: `168` hours and `*`. |
+| `ALLOWED_ORIGINS` | Optional CORS settings; default: `*`. |
 
-For Chroma Cloud, configure `CHROMA_API_KEY`, `CHROMA_TENANT`, and `CHROMA_DATABASE` on the backend. When using local storage in a hosted environment, attach persistent storage for both the vector database and SQLite account database so data survives restarts and redeploys.
+For Chroma Cloud, configure `CHROMA_API_KEY`, `CHROMA_TENANT`, and `CHROMA_DATABASE` on the backend.
 
 ## API overview
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/auth/register`, `/auth/login` | Create an account or start a session. |
-| `GET` | `/auth/me`, `/documents` | Check the session and list indexed files. |
+| `GET` | `/health` | Check backend availability. |
+| `GET` | `/documents` | List all indexed documents. |
 | `POST` | `/upload` | Ingest a supported document. |
 | `POST` | `/chat` | Retrieve relevant passages and answer a question. |
-| `POST` | `/documents/{filename}/summarize` | Generate a document briefing. |
-| `DELETE` | `/documents/{filename}` | Delete a document from the signed-in user's index. |
-| `GET` | `/health` | Check backend availability. |
+| `POST` | `/documents/{filename}/summarize` | Generate an executive document briefing. |
+| `DELETE` | `/documents/{filename}` | Delete a document from the index. |
 
-All document and chat endpoints require a Bearer token. FastAPI's interactive schema is available at `/docs` when the backend is running.
+FastAPI's interactive schema is available at `/docs` when the backend is running.
 
 ## Deployment
 
@@ -117,20 +115,19 @@ The frontend can be deployed directly to GitHub Pages via the included GitHub Ac
 ### 2. Render (Backend API)
 The FastAPI backend is deployed using `render.yaml` and `backend/Dockerfile`:
 - Connect your GitHub repository on [Render](https://render.com) using the Blueprint option or Web Service.
-- Set `GEMINI_API_KEY` and any desired authentication secrets.
-- Initial owner account is automatically seeded on startup so account access persists even across free-tier container restarts.
+- Set `GEMINI_API_KEY`.
 
 ### 3. Vercel (Frontend Alternative)
 The Next.js frontend can also be deployed to [Vercel](https://vercel.com). Configure `NEXT_PUBLIC_API_URL` to point to your live Render backend URL (`https://rag-app-1-rqg6.onrender.com`).
 
 ### 4. GitHub Actions CI/CD
-- **`.github/workflows/ci.yml`**: Runs full backend test suites (`test_auth_flow.py`), frontend linting, Next.js build verification, and Docker validation on pull requests and pushes.
+- **`.github/workflows/ci.yml`**: Runs backend test suites (`test_api.py`), frontend linting, Next.js build verification, and Docker validation on pull requests and pushes.
 - **`.github/workflows/deploy.yml`**: Automatically deploys the frontend to GitHub Pages, publishes backend Docker images to GitHub Container Registry (GHCR), and triggers Render redeployments via webhook when `RENDER_DEPLOY_HOOK_URL` is set in repository secrets.
 
 ## Project layout
 
 ```text
-backend/    FastAPI API, authentication, document processing, and vector search
+backend/    FastAPI API, document processing, and vector search
 frontend/   Next.js App Router interface
 render.yaml Render service definition
 ```

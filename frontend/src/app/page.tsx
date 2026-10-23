@@ -1,111 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import AuthForm from "@/components/AuthForm";
 import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import Sidebar, { type Doc } from "@/components/Sidebar";
-import Spinner from "@/components/Spinner";
 import SummaryModal from "@/components/SummaryModal";
-import {
-  AUTH_EXPIRED_EVENT,
-  getDocuments,
-  getMe,
-  getToken,
-  getUserFromToken,
-  logout,
-  type AuthUser,
-} from "@/lib/api";
-import { AUTH_CHANGED_EVENT } from "@/lib/auth";
+import { getDocuments } from "@/lib/api";
 
 export default function Home() {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [authChecked, setAuthChecked] = useState(false);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
-
-  // Cool new features state:
   const [selectedDocFilter, setSelectedDocFilter] = useState<string | null>(null);
   const [summaryDocFilename, setSummaryDocFilename] = useState<string | null>(null);
 
-  /* ---- Restore saved session on first load ---- */
+  /* ---- Load documents on mount ---- */
   useEffect(() => {
-    let cancelled = false;
-    const token = getToken();
-    if (!token) {
-      queueMicrotask(() => {
-        if (!cancelled) setAuthChecked(true);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    // Quick initial populate from token so UI renders fast
-    const quickUser = getUserFromToken(token);
-    if (quickUser) {
-      queueMicrotask(() => {
-        if (!cancelled) setUser(quickUser);
-      });
-    }
-
-    getMe()
-      .then((res) => {
-        if (!cancelled && res?.user) {
-          setUser(res.user);
-        }
-      })
-      .catch((err) => {
-        console.warn("Could not verify session with /auth/me:", err);
-        // If token has expired or is invalid, clear it
-        if (!quickUser) {
-          logout();
-          if (!cancelled) setUser(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setAuthChecked(true);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  /* ---- Listen for auth expiration or manual change ---- */
-  useEffect(() => {
-    const onAuthReset = () => {
-      const token = getToken();
-      if (!token) {
-        setUser(null);
-        setDocs([]);
-        setSelectedDocFilter(null);
-        setSummaryDocFilename(null);
-        setSidebarOpen(false);
-      } else {
-        const u = getUserFromToken(token);
-        if (u) setUser(u);
-      }
-    };
-
-    window.addEventListener(AUTH_EXPIRED_EVENT, onAuthReset);
-    window.addEventListener("auth:unauthorized", onAuthReset);
-    window.addEventListener(AUTH_CHANGED_EVENT, onAuthReset);
-    return () => {
-      window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthReset);
-      window.removeEventListener("auth:unauthorized", onAuthReset);
-      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthReset);
-    };
-  }, []);
-
-  /* ---- Load user documents whenever logged in ---- */
-  useEffect(() => {
-    if (!user) return;
     let cancelled = false;
     getDocuments()
       .then((list) => {
-        if (!cancelled && Array.isArray(list)) setDocs(list);
+        if (!cancelled && Array.isArray(list)) {
+          setDocs(list);
+        }
       })
       .catch((err) => {
         console.error("Failed to fetch documents:", err);
@@ -113,7 +29,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, []);
 
   /* ---- Dark mode: localStorage + system preference on mount ---- */
   useEffect(() => {
@@ -136,15 +52,6 @@ export default function Home() {
     });
   }
 
-  function handleLogout() {
-    logout();
-    setUser(null);
-    setDocs([]);
-    setSelectedDocFilter(null);
-    setSummaryDocFilename(null);
-    setSidebarOpen(false);
-  }
-
   function handleUploaded(d: Doc) {
     setDocs((prev) => [...prev.filter((x) => x.name !== d.name), d]);
     setSidebarOpen(false); // close sidebar on mobile after upload
@@ -160,18 +67,6 @@ export default function Home() {
     }
   }
 
-  if (!authChecked) {
-    return (
-      <div className="flex h-dvh items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Spinner className="h-8 w-8 text-indigo-500" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <AuthForm onAuthed={setUser} />;
-  }
-
   return (
     <div className="flex h-dvh flex-col">
       <Header
@@ -179,8 +74,6 @@ export default function Home() {
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         darkMode={darkMode}
         onToggleDark={toggleDark}
-        userEmail={user.email}
-        onLogout={handleLogout}
       />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* Mobile backdrop */}
@@ -202,7 +95,6 @@ export default function Home() {
         />
         <Chat
           hasDocs={docs.length > 0}
-          docs={docs}
           selectedDocFilter={selectedDocFilter}
           onSelectDocFilter={setSelectedDocFilter}
         />

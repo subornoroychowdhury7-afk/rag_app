@@ -7,5 +7,4 @@ pymupdf
 pytesseract
 pillow
 python-dotenv
-pyjwt
 httpx

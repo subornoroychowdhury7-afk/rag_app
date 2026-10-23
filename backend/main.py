@@ -1,7 +1,11 @@
 """RAG backend.
 
-POST /upload : PDF -> text -> overlapping chunks -> Gemini embeddings -> ChromaDB
-POST /chat   : question -> embedding -> top-K similar chunks -> Gemini answer
+POST /upload                     : PDF, TXT, MD -> text -> chunks -> embeddings -> ChromaDB
+GET  /documents                  : list indexed documents and chunk counts
+DELETE /documents/{filename}     : remove a document's chunks from ChromaDB
+POST /documents/{filename}/summarize : generate an AI executive summary briefing
+POST /chat                       : question -> embedding -> top-K chunks -> Gemini answer
+GET  /health                     : service health status
 """
 
 import base64
@@ -13,25 +17,24 @@ import urllib.error
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 import chromadb
-import pymupdf as fitz
 import google.generativeai as genai
+import pymupdf as fitz
 import pytesseract
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from google.api_core import exceptions as gexc
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
 
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
 load_dotenv()
-
-# Imported after load_dotenv() so JWT_SECRET / AUTH_DB_PATH from .env are visible to it.
-from auth import get_current_user, router as auth_router  # noqa: E402
 
 logger = logging.getLogger("rag")
 logging.basicConfig(level=logging.INFO)
@@ -39,16 +42,15 @@ logging.basicConfig(level=logging.INFO)
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 API_KEY_OK = bool(GEMINI_API_KEY) and not GEMINI_API_KEY.startswith("your_")
 if not API_KEY_OK:
-    logger.warning("GEMINI_API_KEY is not set - /upload and /chat will fail until it is.")
+    logger.warning("GEMINI_API_KEY is not configured - document indexing and chat will fail until set.")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# "models/text-embedding-004" was shut down on 2026-01-14. The same model + dimension
-# must be used for ingestion and for query embedding, otherwise search breaks.
+# Embedding model and dimensions
 EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").strip()
 EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
-# Generation model (e.g. gemini-2.5-flash or gemini-2.0-flash)
+# Generation model
 GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-2.5-flash").strip()
 generation_model = genai.GenerativeModel(GENERATION_MODEL)
 
@@ -56,14 +58,13 @@ CHUNK_SIZE = int((os.getenv("CHUNK_SIZE") or "1800").strip())
 CHUNK_OVERLAP = int((os.getenv("CHUNK_OVERLAP") or "180").strip())
 TOP_K = 5
 
-# Cosine DISTANCE cutoff (0 = identical, ~1 = unrelated). Chunks further away than
-# this are treated as irrelevant; if none qualify, /chat refuses without calling the
-# LLM. Distances are logged on every /chat call - tune this if it is too strict/loose.
+# Cosine distance cutoff (0 = identical, ~1 = unrelated).
 MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.65").strip())
 
 MAX_UPLOAD_MB = int((os.getenv("MAX_UPLOAD_MB") or "20").strip())
 MAX_QUERY_CHARS = 2000
-MAX_RETRIES = 4  # attempts per Gemini call on rate-limit / transient errors
+MAX_HISTORY_ITEMS = 30
+MAX_RETRIES = 4
 
 NO_ANSWER = "I cannot answer this based on the uploaded documents."
 
@@ -84,9 +85,9 @@ FOLLOW_UPS:
 - [Follow-up question 2]?
 """
 
-# Vector store. With CHROMA_API_KEY set (+ CHROMA_TENANT / CHROMA_DATABASE) the data lives
-# in Chroma Cloud, so the web server itself can be stateless and free-tier friendly.
-# Otherwise it falls back to a local on-disk store (set CHROMA_PATH to a mounted disk).
+# --------------------------------------------------------------------------- #
+# Vector Store Setup
+# --------------------------------------------------------------------------- #
 CHROMA_API_KEY = (os.getenv("CHROMA_API_KEY") or "").strip()
 if CHROMA_API_KEY:
     chroma_client = chromadb.CloudClient(
@@ -94,24 +95,26 @@ if CHROMA_API_KEY:
         database=os.getenv("CHROMA_DATABASE"),
         api_key=CHROMA_API_KEY,
     )
-    index_config = {"spann": {"space": "cosine"}}  # Chroma Cloud's index type
+    index_config = {"spann": {"space": "cosine"}}
     logger.info("Using Chroma Cloud")
 else:
     chroma_path = (os.getenv("CHROMA_PATH") or "./chroma_db").strip()
     os.makedirs(os.path.abspath(chroma_path), exist_ok=True)
     chroma_client = chromadb.PersistentClient(path=chroma_path)
-    index_config = {"hnsw": {"space": "cosine"}}  # local index type
+    index_config = {"hnsw": {"space": "cosine"}}
     logger.info("Using local ChromaDB at %s", chroma_path)
 
 try:
     collection = chroma_client.get_or_create_collection(name="rag_collection", configuration=index_config)
-except Exception:  # e.g. the service rejects the index config - fall back to its defaults
-    logger.warning("Could not apply cosine index config; using ChromaDB defaults.", exc_info=True)
+except Exception:
+    logger.warning("Could not apply cosine index config; falling back to ChromaDB defaults.", exc_info=True)
     collection = chroma_client.get_or_create_collection(name="rag_collection")
 
-app = FastAPI(title="RAG Backend")
+# --------------------------------------------------------------------------- #
+# FastAPI Application & Middleware
+# --------------------------------------------------------------------------- #
+app = FastAPI(title="DocQ&A API", version="1.0.0")
 
-# Auth uses Bearer token, so wildcard origins are safe and avoid Vercel preview domain CORS issues
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
 if raw_origins == "*":
     origins = ["*"]
@@ -127,18 +130,44 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-app.include_router(auth_router)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_request: Request, exc: RequestValidationError):
+    errors = [f"{err.get('loc', ['body'])[-1]}: {err.get('msg', 'invalid value')}" for err in exc.errors()]
+    detail = "; ".join(errors) if errors else "Invalid request payload."
+    return JSONResponse(status_code=400, content={"detail": detail})
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(_request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    logger.exception("Unhandled server exception: %s", exc)
+    return JSONResponse(status_code=500, content={"detail": "An internal server error occurred."})
+
+
+# --------------------------------------------------------------------------- #
+# Request Models & Input Validation
+# --------------------------------------------------------------------------- #
 class Message(BaseModel):
-    role: str
-    content: str
+    role: str = Field(..., max_length=20)
+    content: str = Field(..., max_length=MAX_QUERY_CHARS * 2)
 
 
 class ChatRequest(BaseModel):
-    query: str
-    history: list[Message] = []
+    query: str = Field(..., min_length=1, max_length=MAX_QUERY_CHARS)
+    history: list[Message] = Field(default_factory=list)
     doc_filter: Optional[str] = None
+
+
+def sanitize_filename(raw_name: str) -> str:
+    """Sanitize filename to prevent path traversal and invalid characters."""
+    clean = os.path.basename(raw_name.strip())
+    clean = "".join(ch for ch in clean if ch.isprintable() and ch not in ('\0', '\r', '\n'))
+    clean = clean.strip()
+    if not clean or clean in (".", ".."):
+        raise HTTPException(400, "Invalid file name.")
+    return clean
 
 
 # --------------------------------------------------------------------------- #
@@ -171,21 +200,16 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[st
     return chunks
 
 
-def owned(user_id: str, filename: str) -> dict:
-    """Chroma filter: this user's chunks for one file."""
-    return {"$and": [{"user_id": user_id}, {"source": filename}]}
-
-
 RETRYABLE = (
-    gexc.ResourceExhausted,    # 429 rate limit / quota
-    gexc.ServiceUnavailable,   # 503
-    gexc.DeadlineExceeded,     # 504
-    gexc.InternalServerError,  # 500
+    gexc.ResourceExhausted,
+    gexc.ServiceUnavailable,
+    gexc.DeadlineExceeded,
+    gexc.InternalServerError,
 )
 
 
 def call_gemini(fn, *args, **kwargs):
-    """Call a Gemini SDK function, retrying rate-limit/transient errors with exponential backoff."""
+    """Call a Gemini SDK function with exponential backoff on retryable errors."""
     delay = 1.0
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -200,7 +224,7 @@ def call_gemini(fn, *args, **kwargs):
 
 
 def to_http_error(exc: Exception, action: str) -> HTTPException:
-    """Translate a Gemini/SDK failure into a clear, user-facing HTTP error."""
+    """Translate a Gemini SDK failure into a structured HTTP exception."""
     if isinstance(exc, gexc.ResourceExhausted):
         return HTTPException(429, "The Gemini API rate limit or quota was reached. Please wait a moment and try again.")
     if isinstance(exc, (gexc.Unauthenticated, gexc.PermissionDenied)) or (
@@ -305,7 +329,7 @@ def ocr_pdf_with_gemini(contents: bytes) -> str:
 
 
 def extract_pdf_text(contents: bytes) -> str:
-    """Extract embedded text and OCR only pages that contain no selectable text."""
+    """Extract embedded text and OCR pages containing no selectable text."""
     from PIL import Image
 
     text_pages: list[str] = []
@@ -314,13 +338,15 @@ def extract_pdf_text(contents: bytes) -> str:
         document = fitz.open(stream=contents, filetype="pdf")
         if document.needs_pass:
             raise HTTPException(400, "Encrypted PDFs are not supported.")
+        if len(document) == 0:
+            raise HTTPException(422, "The PDF file contains no pages.")
         for page_number, page in enumerate(document, start=1):
             page_text = page.get_text("text").strip()
             if page_text:
                 text_pages.append(page_text)
                 continue
 
-            # Render at 200 DPI for a useful balance of OCR accuracy and speed.
+            # Render at 200 DPI for optimal balance of OCR accuracy and performance
             pixmap = page.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72), alpha=False)
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
             page_text = pytesseract.image_to_string(image).strip()
@@ -348,16 +374,17 @@ def extract_pdf_text(contents: bytes) -> str:
 # --------------------------------------------------------------------------- #
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "gemini_configured": API_KEY_OK,
+    }
 
 
 @app.post("/upload")
-def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+def upload(file: UploadFile = File(...)):
     require_api_key()
-    user_id = str(user["id"])
 
-    # 1. Validate
-    filename = file.filename or ""
+    filename = sanitize_filename(file.filename or "")
     lower_name = filename.lower()
     valid_exts = (".pdf", ".txt", ".md", ".markdown")
     if not any(lower_name.endswith(ext) for ext in valid_exts):
@@ -366,24 +393,24 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
     max_bytes = MAX_UPLOAD_MB * 1024 * 1024
     contents = file.file.read(max_bytes + 1)
     if len(contents) > max_bytes:
-        raise HTTPException(413, f"File is too large (limit is {MAX_UPLOAD_MB} MB).")
+        raise HTTPException(413, f"File exceeds maximum upload size of {MAX_UPLOAD_MB} MB.")
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
 
-    # 2. Extract text
     started_at = time.perf_counter()
     if lower_name.endswith((".txt", ".md", ".markdown")):
-        text = contents.decode("utf-8", errors="replace").strip()
+        try:
+            text = contents.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            text = contents.decode("utf-8", errors="replace").strip()
     else:
         text = extract_pdf_text(contents)
     extracted_at = time.perf_counter()
 
-    # 3. Chunk
     chunks = chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
     if not chunks:
         raise HTTPException(422, "No extractable text found in this document.")
 
-    # 4. Embed every chunk
     try:
         embeddings = embed_texts(chunks, "retrieval_document")
     except Exception as exc:
@@ -391,21 +418,19 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
         raise to_http_error(exc, "Embedding") from exc
     embedded_at = time.perf_counter()
 
-    # 5. Replace previous version if re-uploaded
+    # Replace previous version if re-uploaded
     try:
-        previous = collection.get(where=owned(user_id, filename), include=[])["ids"]
+        previous = collection.get(where={"source": filename}, include=[])["ids"]
         if previous:
             collection.delete(ids=previous)
     except Exception as e:
         logger.warning("Could not check previous chunks for %s: %s", filename, e)
-        previous = []
 
     collection.add(
         ids=[str(uuid.uuid4()) for _ in chunks],
         embeddings=embeddings,
         documents=chunks,
-        metadatas=[{"source": filename, "chunk_index": i, "user_id": user_id}
-                   for i in range(len(chunks))],
+        metadatas=[{"source": filename, "chunk_index": i} for i in range(len(chunks))],
     )
 
     completed_at = time.perf_counter()
@@ -418,37 +443,35 @@ def upload(file: UploadFile = File(...), user: dict = Depends(get_current_user))
 
 
 @app.get("/documents")
-def get_documents(user: dict = Depends(get_current_user)):
-    """List the logged-in user's documents and their chunk counts."""
-    user_id = str(user["id"])
+def get_documents():
+    """List all indexed documents and their chunk counts."""
     try:
-        results = collection.get(where={"user_id": user_id}, include=["metadatas"])
+        results = collection.get(include=["metadatas"])
         metadatas = results.get("metadatas") or []
         docs = {}
         for meta in metadatas:
-            source = meta.get("source", "unknown")
+            source = (meta or {}).get("source", "unknown")
             docs[source] = docs.get(source, 0) + 1
-        return [{"name": name, "chunks": count} for name, count in docs.items()]
+        return [{"name": name, "chunks": count} for name, count in sorted(docs.items())]
     except Exception as e:
-        logger.exception("Failed to fetch documents for user %s: %s", user_id, e)
+        logger.exception("Failed to fetch documents from ChromaDB: %s", e)
         return []
 
 
 @app.delete("/documents/{filename:path}")
-def delete_document(filename: str, user: dict = Depends(get_current_user)):
-    """Remove the logged-in user's chunks for filename from the vector store."""
-    user_id = str(user["id"])
-    results = collection.get(where=owned(user_id, filename), include=[])
-    if not results["ids"]:
-        raise HTTPException(404, f"No document found with name '{filename}'.")
+def delete_document(filename: str):
+    """Remove a document's chunks from the vector store."""
+    clean_name = sanitize_filename(filename)
+    results = collection.get(where={"source": clean_name}, include=[])
+    if not results.get("ids"):
+        raise HTTPException(404, f"No document found with name '{clean_name}'.")
     collection.delete(ids=results["ids"])
-    logger.info("Deleted %d chunks for %s by user %s", len(results["ids"]), filename, user_id)
-    return {"message": "Document deleted", "filename": filename, "chunks_deleted": len(results["ids"])}
+    logger.info("Deleted %d chunks for %s", len(results["ids"]), clean_name)
+    return {"message": "Document deleted", "filename": clean_name, "chunks_deleted": len(results["ids"])}
 
 
 @app.post("/chat")
-def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
-    user_id = str(user["id"])
+def chat(request: ChatRequest):
     query = request.query.strip()
     if not query:
         raise HTTPException(400, "Query must not be empty.")
@@ -456,13 +479,17 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
 
-    # Determine filter: all documents owned by user or restricted to doc_filter
+    # Determine filter: all documents or restricted to specific document
+    where_filter = None
     if request.doc_filter and request.doc_filter.strip():
-        where_filter = owned(user_id, request.doc_filter.strip())
-    else:
-        where_filter = {"user_id": user_id}
+        filter_name = sanitize_filename(request.doc_filter)
+        where_filter = {"source": filter_name}
 
-    total = len(collection.get(where=where_filter, include=[])["ids"])
+    if where_filter:
+        total = len(collection.get(where=where_filter, include=[])["ids"])
+    else:
+        total = collection.count()
+
     if total == 0:
         return {
             "answer": NO_ANSWER,
@@ -472,23 +499,24 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
             "suggested_followups": [],
         }
 
-    # 1. Embed query
     try:
         query_vector = embed_text(query, "retrieval_query")
     except Exception as exc:
         logger.exception("Query embedding failed")
         raise to_http_error(exc, "Embedding") from exc
 
-    # 2. Vector search
-    results = collection.query(
-        query_embeddings=[query_vector],
-        n_results=min(TOP_K, total),
-        where=where_filter,
-        include=["documents", "distances", "metadatas"],
-    )
-    distances: list[float] = results["distances"][0]
-    docs: list[str] = results["documents"][0]
-    metadatas: list[dict] = results["metadatas"][0]
+    query_kwargs = {
+        "query_embeddings": [query_vector],
+        "n_results": min(TOP_K, total),
+        "include": ["documents", "distances", "metadatas"],
+    }
+    if where_filter:
+        query_kwargs["where"] = where_filter
+
+    results = collection.query(**query_kwargs)
+    distances: list[float] = results["distances"][0] if results.get("distances") else []
+    docs: list[str] = results["documents"][0] if results.get("documents") else []
+    metadatas: list[dict] = results["metadatas"][0] if results.get("metadatas") else []
 
     logger.info("Retrieval distances (cutoff %.2f): %s", MAX_DISTANCE, [round(d, 3) for d in distances])
 
@@ -497,7 +525,6 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         if dist <= MAX_DISTANCE:
             source_name = (meta or {}).get("source", "Document")
             chunk_idx = (meta or {}).get("chunk_index", 0)
-            # Cosine distance to match percentage
             relevance = max(10, min(99, round((1.0 - dist) * 100)))
             citations.append({
                 "text": doc,
@@ -518,13 +545,13 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
             "suggested_followups": [],
         }
 
-    # 3. Build strict prompt
     context_string = "\n\n---\n\n".join(retrieved_chunks)
     prompt = PROMPT_TEMPLATE.format(context_string=context_string, query=query)
 
-    # 4. Generate
+    # Limit history to prevent excessive context blowup
     gemini_history = []
-    for msg in request.history:
+    recent_history = request.history[-MAX_HISTORY_ITEMS:]
+    for msg in recent_history:
         role = "model" if msg.role == "assistant" else "user"
         gemini_history.append({"role": role, "parts": [msg.content]})
 
@@ -539,7 +566,6 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
         logger.exception("Generation failed")
         raise to_http_error(exc, "Generation") from exc
 
-    # Parse suggested follow-up questions
     suggested_followups: list[str] = []
     if "FOLLOW_UPS:" in answer:
         parts = answer.split("FOLLOW_UPS:")
@@ -560,17 +586,16 @@ def chat(request: ChatRequest, user: dict = Depends(get_current_user)):
 
 
 @app.post("/documents/{filename:path}/summarize")
-def summarize_document(filename: str, user: dict = Depends(get_current_user)):
+def summarize_document(filename: str):
     """Generate an executive-grade AI briefing and summary for an indexed document."""
-    user_id = str(user["id"])
+    clean_name = sanitize_filename(filename)
     require_api_key()
 
-    results = collection.get(where=owned(user_id, filename), include=["documents", "metadatas"])
+    results = collection.get(where={"source": clean_name}, include=["documents", "metadatas"])
     docs = results.get("documents") or []
     if not docs:
-        raise HTTPException(404, f"No content found for document '{filename}'.")
+        raise HTTPException(404, f"No content found for document '{clean_name}'.")
 
-    # Order chunks sequentially
     metas = results.get("metadatas") or []
     indexed_docs = []
     for doc, meta in zip(docs, metas):
@@ -579,7 +604,6 @@ def summarize_document(filename: str, user: dict = Depends(get_current_user)):
     indexed_docs.sort(key=lambda x: x[0])
     combined_text = "\n\n".join(t for _, t in indexed_docs)
 
-    # Gemini Flash has a large context window, 40k characters is fast and comprehensive
     text_sample = combined_text[:40000]
 
     summary_prompt = f"""You are an expert executive research analyst. Generate a comprehensive, professional executive briefing based ONLY on the provided document text.
@@ -598,7 +622,7 @@ A concise paragraph synthesizing the primary objective, context, and core thesis
 ### ❓ Recommended Follow-up Inquiries
 - 3 thoughtful questions an analyst or executive should explore next based on this document.
 
-Document Name: {filename}
+Document Name: {clean_name}
 Document Content:
 {text_sample}
 """
@@ -607,11 +631,11 @@ Document Content:
         response = call_gemini(generation_model.generate_content, summary_prompt)
         summary_md = response.text
     except Exception as exc:
-        logger.exception("Summarization failed for %s", filename)
+        logger.exception("Summarization failed for %s", clean_name)
         raise to_http_error(exc, "Summarization") from exc
 
     return {
-        "filename": filename,
+        "filename": clean_name,
         "summary": summary_md,
         "total_chunks": len(docs),
     }

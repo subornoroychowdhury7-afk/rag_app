@@ -5,9 +5,6 @@ interface HeaderProps {
   onToggleSidebar: () => void;
   darkMode: boolean;
   onToggleDark: () => void;
-  userEmail?: string | null;
-  onLogout?: () => void;
-  onSignOut?: () => void;
 }
 
 export default function Header({
@@ -15,12 +12,7 @@ export default function Header({
   onToggleSidebar,
   darkMode,
   onToggleDark,
-  userEmail,
-  onLogout,
-  onSignOut,
 }: HeaderProps) {
-  const handleLogout = onLogout || onSignOut;
-
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-lg dark:border-slate-700/50 dark:bg-slate-900/80">
       <div className="flex items-center gap-3">
@@ -50,15 +42,6 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-2">
-        {userEmail && (
-          <span
-            className="mr-1 hidden max-w-[16rem] truncate text-xs sm:text-sm text-slate-500 dark:text-slate-400 sm:inline"
-            title={userEmail}
-          >
-            {userEmail}
-          </span>
-        )}
-
         {/* Dark mode toggle */}
         <button
           onClick={onToggleDark}
@@ -83,24 +66,6 @@ export default function Header({
             </svg>
           )}
         </button>
-
-        {/* Logout */}
-        {handleLogout && (
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-            aria-label="Log out"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"
-              />
-            </svg>
-            <span className="hidden sm:inline">Log out</span>
-          </button>
-        )}
       </div>
     </header>
   );

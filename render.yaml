@@ -9,12 +9,6 @@ services:
     envVars:
       - key: CHROMA_PATH
         value: ./chroma_db
-      - key: AUTH_DB_PATH
-        value: ./auth.db
-      - key: JWT_SECRET
-        generateValue: true
-      - key: AUTH_SECRET
-        generateValue: true
       - key: GEMINI_API_KEY
         sync: false
       - key: ALLOWED_ORIGINS
