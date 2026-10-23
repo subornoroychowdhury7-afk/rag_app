@@ -139,7 +139,12 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          npx --yes vercel deploy --prod --token "$VERCEL_TOKEN" --yes
+          # VERCEL_ORG_ID and VERCEL_PROJECT_ID are read automatically by the CLI
+          # replacing the gitignored .vercel/project.json
+          npx --yes vercel deploy --prod \
+            --token "$VERCEL_TOKEN" \
+            --yes \
+            --no-wait
 
       - name: Notice if Vercel token not set
         if: ${{ env.VERCEL_TOKEN == '' }}
