@@ -104,11 +104,10 @@ function CitationsView({
               <div className="flex items-center gap-2 shrink-0">
                 {c.relevance && (
                   <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                      c.relevance >= 70
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${c.relevance >= 70
                         ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
                         : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-400"
-                    }`}
+                      }`}
                   >
                     {c.relevance}% Match
                   </span>
@@ -243,9 +242,9 @@ export default function Chat({
 
     const win = typeof window !== "undefined"
       ? (window as unknown as {
-          SpeechRecognition?: new () => SpeechRecognitionInstanceLike;
-          webkitSpeechRecognition?: new () => SpeechRecognitionInstanceLike;
-        })
+        SpeechRecognition?: new () => SpeechRecognitionInstanceLike;
+        webkitSpeechRecognition?: new () => SpeechRecognitionInstanceLike;
+      })
       : {};
 
     const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
@@ -499,11 +498,10 @@ export default function Chat({
 
                   <div className="flex-1 min-w-0">
                     <div
-                      className={`rounded-2xl rounded-tl-md border px-4 py-3 text-sm leading-relaxed ${
-                        m.isError
+                      className={`rounded-2xl rounded-tl-md border px-4 py-3 text-sm leading-relaxed ${m.isError
                           ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300"
                           : "border-slate-200/90 bg-white text-slate-800 shadow-xs dark:border-slate-700/80 dark:bg-slate-800 dark:text-slate-200"
-                      }`}
+                        }`}
                     >
                       {m.isError ? m.content : <MarkdownRenderer content={m.content} />}
                     </div>
@@ -622,11 +620,10 @@ export default function Chat({
                 <button
                   type="button"
                   onClick={() => setAnswerMode("detailed")}
-                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
-                    answerMode === "detailed"
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${answerMode === "detailed"
                       ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
                       : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
-                  }`}
+                    }`}
                   title="Thorough analysis with comprehensive evidence, comparisons, and derivations"
                 >
                   📖 Detailed
@@ -634,11 +631,10 @@ export default function Chat({
                 <button
                   type="button"
                   onClick={() => setAnswerMode("concise")}
-                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
-                    answerMode === "concise"
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${answerMode === "concise"
                       ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
                       : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
-                  }`}
+                    }`}
                   title="Executive-grade concise summary with key takeaways and figures"
                 >
                   ⚡ Concise
@@ -646,11 +642,10 @@ export default function Chat({
                 <button
                   type="button"
                   onClick={() => setAnswerMode("academic")}
-                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
-                    answerMode === "academic"
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${answerMode === "academic"
                       ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
                       : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
-                  }`}
+                    }`}
                   title="Rigorous scholarly analysis with LaTeX math derivations and methodology"
                 >
                   🎓 Academic
@@ -658,11 +653,10 @@ export default function Chat({
                 <button
                   type="button"
                   onClick={() => setAnswerMode("step_by_step")}
-                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
-                    answerMode === "step_by_step"
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${answerMode === "step_by_step"
                       ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
                       : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
-                  }`}
+                    }`}
                   title="Sequential procedural instructions with numbered steps and verification"
                 >
                   🔢 Step-by-Step
@@ -699,11 +693,10 @@ export default function Chat({
               type="button"
               onClick={toggleListening}
               disabled={!hasDocs}
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all ${
-                isListening
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all ${isListening
                   ? "bg-rose-500 text-white shadow-lg ring-4 ring-rose-500/30 animate-pulse"
                   : "border border-slate-200 bg-white text-slate-500 hover:border-indigo-300 hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-              } disabled:cursor-not-allowed disabled:opacity-40`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               title={isListening ? "Listening... click to stop" : "Voice dictation (speech to text)"}
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
