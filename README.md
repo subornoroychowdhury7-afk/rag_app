@@ -41,7 +41,7 @@ Query  → embed query → cosine similarity search → distance filter → Gemi
 - Chunk size: **1,800 characters**
 - Chunk overlap: **300 characters**
 - Embedding model: `models/gemini-embedding-2` (768 dimensions)
-- Generation model: `gemini-2.5-flash`
+- Generation model: `gemini-3.5-flash`
 - Cosine distance cutoff: **0.75** (chunks with distance > 0.75 are discarded; lower distance = higher similarity)
 - Top-K retrieval: 10 chunks per query
 
