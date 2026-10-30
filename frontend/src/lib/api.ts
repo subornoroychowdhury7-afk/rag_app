@@ -109,11 +109,13 @@ export const uploadPdf = uploadFile;
 export function sendChat(
   query: string,
   history: ChatMessage[] = [],
-  docFilter?: string | null
+  docFilter?: string | null,
+  mode: "detailed" | "concise" | "academic" | "step_by_step" = "detailed"
 ): Promise<ChatResult> {
-  const payload: { query: string; history: ChatMessage[]; doc_filter?: string } = {
+  const payload: { query: string; history: ChatMessage[]; doc_filter?: string; mode?: string } = {
     query,
     history,
+    mode,
   };
   if (docFilter && docFilter.trim()) {
     payload.doc_filter = docFilter.trim();

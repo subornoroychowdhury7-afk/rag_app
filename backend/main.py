@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -52,12 +53,13 @@ EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
 # Generation model
 GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-2.5-flash").strip()
+GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
 
-# Generation config: high token limit + extended thinking for deeper, more
-# accurate answers. thinking_budget enables Gemini 2.5 Flash's reasoning mode.
+# Generation config: high token limit + low temperature for grounded, precise, high-accuracy answers
 _generation_config = genai.types.GenerationConfig(
     max_output_tokens=8192,
-    temperature=1,          # Required to be 1 when thinking is enabled
+    temperature=GENERATION_TEMPERATURE,
+    top_p=0.95,
 )
 try:
     generation_model = genai.GenerativeModel(
@@ -69,11 +71,11 @@ except Exception:
 
 CHUNK_SIZE = int((os.getenv("CHUNK_SIZE") or "1800").strip())
 CHUNK_OVERLAP = int((os.getenv("CHUNK_OVERLAP") or "300").strip())
-TOP_K = 10                  # Retrieve more chunks for richer context
+TOP_K = int((os.getenv("TOP_K") or "12").strip())                  # Retrieve 12 chunks for comprehensive context
 
 # Cosine distance cutoff (0 = identical, ~1 = unrelated).
-# 0.75 is more permissive so borderline-relevant chunks aren't discarded.
-MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.75").strip())
+# 0.78 is permissive so borderline-relevant chunks aren't discarded before hybrid re-ranking.
+MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.78").strip())
 
 MAX_UPLOAD_MB = int((os.getenv("MAX_UPLOAD_MB") or "20").strip())
 MAX_QUERY_CHARS = 2000
@@ -82,39 +84,79 @@ MAX_RETRIES = 4
 
 NO_ANSWER = "I cannot answer this based on the uploaded documents."
 
-PROMPT_TEMPLATE = """You are a highly knowledgeable academic and technical expert. \
-Answer the user's question using ONLY the provided context excerpts from their uploaded documents.
+MODE_INSTRUCTIONS = {
+    "detailed": (
+        "ANSWER STYLE: IN-DEPTH & THOROUGH (Default)\n"
+        "- Provide a comprehensive, multi-faceted analysis with rich supporting evidence.\n"
+        "- Organize your explanation with clear Markdown headings (##, ###).\n"
+        "- Include relevant quantitative figures, technical mechanisms, and criteria found in the context.\n"
+        "- Use markdown comparison tables (| Col 1 | Col 2 |) whenever comparing tools, options, or metrics."
+    ),
+    "concise": (
+        "ANSWER STYLE: EXECUTIVE & CONCISE\n"
+        "- Deliver a rapid, high-impact executive summary.\n"
+        "- Lead with the bottom-line takeaway in 1 sentence, followed by 3-5 crisp bullet points.\n"
+        "- Focus strictly on actionable outcomes, key figures, and core findings."
+    ),
+    "academic": (
+        "ANSWER STYLE: ACADEMIC & TECHNICAL\n"
+        "- Adopt a formal, rigorous scholarly tone.\n"
+        "- Provide complete mathematical formulations in LaTeX, explicit assumptions, and methodological evaluation.\n"
+        "- Structure arguments methodically, highlighting evidence strength and potential boundary conditions."
+    ),
+    "step_by_step": (
+        "ANSWER STYLE: STEP-BY-STEP PROCEDURAL GUIDE\n"
+        "- Format the answer as a clear sequential guide with numbered steps (1., 2., 3.).\n"
+        "- Detail any prerequisites, specific execution steps, and verification checkpoints."
+    ),
+}
 
-If the answer cannot be found in the context, say exactly: \
-'I cannot answer this based on the uploaded documents.'
+PROMPT_TEMPLATE = """You are DocQ&A Assistant, an elite academic and technical research AI. \
+Your objective is to deliver the most accurate, thorough, and insightful answer possible, \
+grounded STRICTLY in the provided context excerpts from the user's uploaded documents.
 
-Do NOT use any outside knowledge beyond what is in the context below.
-
-Context (from uploaded documents):
+CONTEXT EXCERPTS FROM UPLOADED DOCUMENTS:
 {context_string}
 
-User Question: {query}
+USER QUESTION: {query}
 
-Answer Requirements:
-1. Be THOROUGH and DETAILED — do not give a short or vague answer if the context supports a longer one.
-2. STRUCTURE your response clearly:
-   - Use markdown headings (##, ###) to organise multi-part answers.
-   - Use numbered steps for procedures or derivations.
-   - Use bullet points for lists of facts, properties, or items.
-   - Use **bold** for key terms, definitions, or important values.
-3. SHOW YOUR WORKING for any mathematical or logical reasoning:
-   - Write all math in LaTeX: inline as $...$ and display equations as $$...$$.
-   - Show each step of a derivation or calculation explicitly.
-   - Define all variables and symbols used.
-4. QUOTE or PARAPHRASE the relevant passage from the context to justify your answer.
-5. If multiple parts of the context are relevant, synthesise them into a cohesive answer.
-6. If the context only partially answers the question, answer what you can and clearly state what is missing.
+{mode_instruction}
 
-After your answer, if the question was answerable, append EXACTLY this block:
+CORE ANSWER STANDARDS:
+1. EXECUTIVE CLARITY & DIRECTNESS:
+   - Begin with a direct, high-impact answer to the user's question in the first 1-2 sentences.
+   - Do NOT begin with meta-commentary like "Based on the provided excerpts..." or "According to the context...". Answer with natural authority.
+
+2. DEPTH & RIGOR:
+   - Elaborate thoroughly. Do not give a superficial or short response if the context contains rich details, nuances, figures, or explanations.
+   - Synthesize information across multiple excerpts or documents into a coherent narrative.
+
+3. INLINE GROUNDED CITATIONS:
+   - Whenever stating a key fact, metric, formula, or finding, attribute it inline using the document name and excerpt number in brackets: e.g. `[DocumentName.pdf]` or `[DocumentName.pdf, Excerpt 1]`.
+   - This provides verifiable proof for every statement.
+
+4. STRUCTURE & TYPOGRAPHY:
+   - Use Markdown headings (##, ###) to organize distinct sections.
+   - Use comparison tables (`| Item | Description | Metric |`) when contrasting data points, alternatives, or features.
+   - Use bullet points for itemized properties, criteria, or lists.
+   - Use numbered steps for sequential workflows, chronological events, or algorithms.
+   - Use **bold** typography for key terms, definitions, and critical metrics.
+
+5. MATHEMATICS, FORMULAS & CODE:
+   - Format ALL mathematical symbols, variables, and expressions using LaTeX: inline as $...$ and display equations as $$...$$.
+   - Explicitly define all variables and show step-by-step mathematical reasoning.
+   - Format code blocks, commands, and structured configurations in syntax-highlighted code blocks (e.g. ```python, ```bash, ```json).
+
+6. HONEST LIMITS & PARTIAL ANSWERS:
+   - If the context answers only part of the question, answer what you can with citations, and explicitly state what specific information is not covered in the excerpts.
+   - If the provided context contains absolutely NO relevant information to answer the question, state exactly:
+     'I cannot answer this based on the uploaded documents.'
+
+At the very end of your answer, if the question was answerable, append EXACTLY this block:
 FOLLOW_UPS:
-- [Follow-up question 1]?
-- [Follow-up question 2]?
-- [Follow-up question 3]?
+- [Contextually relevant follow-up question 1]?
+- [Contextually relevant follow-up question 2]?
+- [Contextually relevant follow-up question 3]?
 """
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +232,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=MAX_QUERY_CHARS)
     history: list[Message] = Field(default_factory=list)
     doc_filter: Optional[str] = None
+    mode: Optional[str] = Field(default="detailed", max_length=30)
 
 
 def sanitize_filename(raw_name: str) -> str:
@@ -206,7 +249,7 @@ def sanitize_filename(raw_name: str) -> str:
 # Helpers
 # --------------------------------------------------------------------------- #
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
-    """Split text into overlapping windows."""
+    """Split text into semantically coherent overlapping windows."""
     if chunk_size <= 0:
         raise ValueError("chunk_size must be a positive integer")
     if overlap < 0 or overlap >= chunk_size:
@@ -218,18 +261,141 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[st
     if len(text) <= chunk_size:
         return [text]
 
-    step = chunk_size - overlap
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= len(text):
-            break
-        start += step
+    separators = ["\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " ", ""]
+
+    def _split(txt: str, sep_idx: int) -> list[str]:
+        if len(txt) <= chunk_size:
+            return [txt]
+        if sep_idx >= len(separators):
+            step = chunk_size - overlap
+            return [txt[i:i + chunk_size] for i in range(0, len(txt), step)]
+
+        sep = separators[sep_idx]
+        if sep == "":
+            step = chunk_size - overlap
+            return [txt[i:i + chunk_size] for i in range(0, len(txt), step)]
+
+        splits = txt.split(sep)
+        result = []
+        for i, s in enumerate(splits):
+            suffix = sep if i < len(splits) - 1 else ""
+            s_full = s + suffix
+            if not s_full.strip():
+                continue
+            if len(s_full) <= chunk_size:
+                result.append(s_full)
+            else:
+                result.extend(_split(s_full, sep_idx + 1))
+        return result
+
+    pieces = _split(text, 0)
+    chunks = []
+    current_docs = []
+    current_len = 0
+
+    for piece in pieces:
+        piece_len = len(piece)
+        if current_len + piece_len <= chunk_size:
+            current_docs.append(piece)
+            current_len += piece_len
+        else:
+            if current_docs:
+                merged = "".join(current_docs).strip()
+                if merged:
+                    chunks.append(merged)
+                overlap_docs = []
+                overlap_len = 0
+                for d in reversed(current_docs):
+                    if overlap_len + len(d) <= overlap:
+                        overlap_docs.insert(0, d)
+                        overlap_len += len(d)
+                    else:
+                        break
+                current_docs = overlap_docs + [piece]
+                current_len = sum(len(d) for d in current_docs)
+            else:
+                chunks.append(piece.strip())
+                current_docs = []
+                current_len = 0
+
+    if current_docs:
+        merged = "".join(current_docs).strip()
+        if merged and (not chunks or chunks[-1] != merged):
+            chunks.append(merged)
+
     return chunks
+
+
+def compute_keyword_score(query: str, text: str) -> float:
+    """Calculate term frequency & exact phrase matching score between query and chunk."""
+    stopwords = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he",
+        "in", "is", "it", "its", "of", "on", "that", "the", "to", "was", "were",
+        "will", "with", "what", "how", "why", "who", "which", "when", "can", "could",
+        "would", "should", "does", "do", "tell", "me", "about", "give", "i", "you"
+    }
+    tokens = [t.lower() for t in re.findall(r"\b[A-Za-z0-9_\-\.]{2,}\b", query) if t.lower() not in stopwords]
+    if not tokens:
+        return 0.0
+
+    text_lower = text.lower()
+    total_weight = 0.0
+    matched_weight = 0.0
+
+    clean_query = " ".join(tokens)
+    if len(tokens) >= 2 and clean_query in text_lower:
+        matched_weight += 2.5
+        total_weight += 2.5
+
+    for token in set(tokens):
+        is_num = any(c.isdigit() for c in token)
+        is_acronym = token.upper() in query and len(token) >= 2
+        weight = 2.0 if (is_num or is_acronym) else 1.0
+        total_weight += weight
+
+        count = len(re.findall(r"\b" + re.escape(token) + r"\b", text_lower))
+        if count > 0:
+            matched_weight += weight * min(1.0 + 0.25 * (count - 1), 1.75)
+
+    return min(1.0, matched_weight / max(total_weight, 1.0))
+
+
+def contextualize_query(query: str, history: list[Message]) -> str:
+    """Rewrite follow-up questions to be self-contained for accurate vector retrieval."""
+    if not history or not API_KEY_OK:
+        return query
+
+    recent = history[-4:]
+    ambiguous_indicators = {
+        "it", "this", "that", "these", "those", "they", "them", "their", "its",
+        "he", "she", "his", "her", "why", "how", "what about", "and", "explain more",
+        "elaborate", "tell me more", "summarize", "difference", "compare", "step",
+        "earlier", "previous", "above", "mentioned"
+    }
+    words = set(re.findall(r"\b\w+\b", query.lower()))
+    is_likely_followup = bool(words & ambiguous_indicators) or len(query.split()) <= 4
+    if not is_likely_followup:
+        return query
+
+    history_text = "\n".join(f"{m.role}: {m.content[:200]}" for m in recent)
+    prompt = (
+        "Given the conversation history and the user's latest follow-up question, rewrite the question "
+        "into a single, standalone search query that includes all relevant subjects, entities, and context "
+        "needed to retrieve relevant document excerpts.\n"
+        "Do NOT answer the question. Return ONLY the rewritten query text without explanation.\n\n"
+        f"Conversation History:\n{history_text}\n\n"
+        f"Latest Question: {query}\n"
+        "Standalone Search Query:"
+    )
+    try:
+        res = call_gemini(generation_model.generate_content, prompt)
+        rewritten = res.text.strip().strip('"\'')
+        if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
+            logger.info("Contextualized query: '%s' -> '%s'", query, rewritten)
+            return rewritten
+    except Exception as e:
+        logger.warning("Contextual query rewriting failed, using original query: %s", e)
+    return query
 
 
 RETRYABLE = (
@@ -375,7 +541,8 @@ def extract_pdf_text(contents: bytes) -> str:
         for page_number, page in enumerate(document, start=1):
             page_text = page.get_text("text").strip()
             if page_text:
-                text_pages.append(page_text)
+                clean_page = re.sub(r'(\w+)-\n(\w+)', r'\1\2', page_text)
+                text_pages.append(f"[Page {page_number}]\n{clean_page}")
                 continue
 
             # Render at 200 DPI for optimal balance of OCR accuracy and performance
@@ -383,7 +550,8 @@ def extract_pdf_text(contents: bytes) -> str:
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
             page_text = pytesseract.image_to_string(image).strip()
             if page_text:
-                text_pages.append(page_text)
+                clean_ocr = re.sub(r'(\w+)-\n(\w+)', r'\1\2', page_text)
+                text_pages.append(f"[Page {page_number}]\n{clean_ocr}")
             logger.info("OCR page %d/%d: %d characters", page_number, len(document), len(page_text))
     except HTTPException:
         raise
@@ -525,7 +693,26 @@ def chat(request: ChatRequest):
     else:
         total = collection.count()
 
+    greeting_regex = re.compile(
+        r"^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening))\b|"
+        r"\b(who\s+are\s+you|what\s+can\s+you\s+do|how\s+can\s+you\s+help|what\s+is\s+this\s+app)\b|"
+        r"\b(what\s+documents|list\s+documents|which\s+files|show\s+documents|what\s+do\s+you\s+know)\b|"
+        r"\b(help|how\s+to\s+use)\b",
+        re.IGNORECASE,
+    )
+
     if total == 0:
+        if greeting_regex.search(query):
+            return {
+                "answer": (
+                    "Hello! I am your **DocQ&A Assistant**. You currently do not have any documents indexed. "
+                    "Please upload a PDF, Markdown, or text file using the sidebar to begin asking questions!"
+                ),
+                "sources": [],
+                "source_files": [],
+                "citations": [],
+                "suggested_followups": [],
+            }
         return {
             "answer": NO_ANSWER,
             "sources": [],
@@ -534,15 +721,20 @@ def chat(request: ChatRequest):
             "suggested_followups": [],
         }
 
+    # Contextualize follow-up questions using recent chat turns for accurate retrieval
+    search_query = contextualize_query(query, request.history)
+
     try:
-        query_vector = embed_text(query, "retrieval_query")
+        query_vector = embed_text(search_query, "retrieval_query")
     except Exception as exc:
         logger.exception("Query embedding failed")
         raise to_http_error(exc, "Embedding") from exc
 
+    # Retrieve candidate pool for hybrid vector + keyword re-ranking
+    candidate_k = min(TOP_K * 2, total)
     query_kwargs = {
         "query_embeddings": [query_vector],
-        "n_results": min(TOP_K, total),
+        "n_results": candidate_k,
         "include": ["documents", "distances", "metadatas"],
     }
     if where_filter:
@@ -553,25 +745,80 @@ def chat(request: ChatRequest):
     docs: list[str] = results["documents"][0] if results.get("documents") else []
     metadatas: list[dict] = results["metadatas"][0] if results.get("metadatas") else []
 
-    logger.info("Retrieval distances (cutoff %.2f): %s", MAX_DISTANCE, [round(d, 3) for d in distances])
-
-    citations = []
+    scored_candidates = []
     for doc, meta, dist in zip(docs, metadatas, distances):
-        if dist <= MAX_DISTANCE:
-            source_name = (meta or {}).get("source", "Document")
-            chunk_idx = (meta or {}).get("chunk_index", 0)
-            relevance = max(10, min(99, round((1.0 - dist) * 100)))
-            citations.append({
+        source_name = (meta or {}).get("source", "Document")
+        chunk_idx = (meta or {}).get("chunk_index", 0)
+        vec_sim = max(0.0, 1.0 - dist)
+        kw_sim = compute_keyword_score(search_query, doc)
+
+        # Hybrid composite score combining dense semantic and exact lexical signals
+        if kw_sim > 0:
+            composite_score = 0.65 * vec_sim + 0.35 * kw_sim
+        else:
+            composite_score = 0.85 * vec_sim
+
+        # Dynamically widen cutoff for passages with strong keyword overlap
+        effective_cutoff = MAX_DISTANCE + (0.08 if kw_sim > 0.3 else 0.0)
+        if dist <= effective_cutoff:
+            relevance = max(15, min(99, round(composite_score * 100)))
+            scored_candidates.append({
                 "text": doc,
                 "source": source_name,
-                "relevance": relevance,
                 "chunk_index": chunk_idx,
+                "relevance": relevance,
+                "composite_score": composite_score,
+                "dist": dist,
             })
+
+    # Re-rank by composite score descending
+    scored_candidates.sort(key=lambda x: x["composite_score"], reverse=True)
+    citations = scored_candidates[:TOP_K]
 
     retrieved_chunks = [c["text"] for c in citations]
     source_files = sorted(list({c["source"] for c in citations}))
 
     if not retrieved_chunks:
+        if greeting_regex.search(query):
+            doc_items = get_documents()
+            if doc_items:
+                doc_summary = "\n".join(f"- **{d['name']}** ({d['chunks']} indexed passages)" for d in doc_items)
+                greeting_answer = (
+                    f"Hello! I am your **DocQ&A Assistant**, ready to help you analyze and extract verified insights "
+                    f"from your knowledge base.\n\n"
+                    f"### 📚 Available Documents ({len(doc_items)} total):\n"
+                    f"{doc_summary}\n\n"
+                    f"### 💡 What I Can Help You With:\n"
+                    f"- **In-depth Q&A**: Ask targeted questions and get comprehensive answers with inline citations `[DocumentName.pdf]`.\n"
+                    f"- **Cross-Document Synthesis**: Compare findings, metrics, and arguments across multiple files.\n"
+                    f"- **Technical & Mathematical Reasoning**: Step-by-step problem solving with clean LaTeX formulas ($E=mc^2$).\n"
+                    f"- **Executive Briefings**: Summaries, data tables, and structured procedural guides.\n\n"
+                    f"Try asking a question about any of your documents above to begin!"
+                )
+                sample_followups = [
+                    f"What are the key findings in {doc_items[0]['name']}?",
+                    "Can you summarize the main themes across all documents?",
+                    "What actionable takeaways are outlined in the files?",
+                ]
+                return {
+                    "answer": greeting_answer,
+                    "sources": [],
+                    "source_files": [d["name"] for d in doc_items],
+                    "citations": [],
+                    "suggested_followups": sample_followups,
+                }
+            else:
+                return {
+                    "answer": (
+                        "Hello! I am your **DocQ&A Assistant**. You currently do not have any documents uploaded. "
+                        "Please upload a PDF, Markdown, or text file via the sidebar to get started!"
+                    ),
+                    "sources": [],
+                    "source_files": [],
+                    "citations": [],
+                    "suggested_followups": [],
+                }
+
         return {
             "answer": NO_ANSWER,
             "sources": [],
@@ -580,8 +827,23 @@ def chat(request: ChatRequest):
             "suggested_followups": [],
         }
 
-    context_string = "\n\n---\n\n".join(retrieved_chunks)
-    prompt = PROMPT_TEMPLATE.format(context_string=context_string, query=query)
+    # Format structured context blocks with source, section, and match metadata
+    context_blocks = []
+    for i, c in enumerate(citations, 1):
+        context_blocks.append(
+            f"=== EXCERPT {i} [Source: {c['source']} | Passage #{c['chunk_index']} | Match: {c['relevance']}%] ===\n"
+            f"{c['text']}"
+        )
+    context_string = "\n\n".join(context_blocks)
+
+    mode_key = (request.mode or "detailed").lower()
+    mode_instruction = MODE_INSTRUCTIONS.get(mode_key, MODE_INSTRUCTIONS["detailed"])
+
+    prompt = PROMPT_TEMPLATE.format(
+        context_string=context_string,
+        query=query,
+        mode_instruction=mode_instruction,
+    )
 
     # Limit history to prevent excessive context blowup
     gemini_history = []

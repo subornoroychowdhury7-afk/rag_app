@@ -211,6 +211,7 @@ export default function Chat({
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
+  const [answerMode, setAnswerMode] = useState<"detailed" | "concise" | "academic" | "step_by_step">("detailed");
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -362,7 +363,7 @@ export default function Chat({
         .filter((m) => !m.isError)
         .map((m) => ({ role: m.role, content: m.content }));
 
-      const res = await sendChat(query, history, selectedDocFilter);
+      const res = await sendChat(query, history, selectedDocFilter, answerMode);
       setMessages((m) => [
         ...m,
         {
@@ -612,6 +613,63 @@ export default function Chat({
               </button>
             </div>
           )}
+
+          {/* Answer Style Mode Selector */}
+          <div className="flex flex-wrap items-center justify-between gap-1.5 px-0.5">
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+              <span className="font-medium text-slate-400 dark:text-slate-500">Style:</span>
+              <div className="inline-flex rounded-lg border border-slate-200/80 bg-slate-100/70 p-0.5 dark:border-slate-700/80 dark:bg-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => setAnswerMode("detailed")}
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
+                    answerMode === "detailed"
+                      ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
+                      : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                  }`}
+                  title="Thorough analysis with comprehensive evidence, comparisons, and derivations"
+                >
+                  📖 Detailed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnswerMode("concise")}
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
+                    answerMode === "concise"
+                      ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
+                      : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                  }`}
+                  title="Executive-grade concise summary with key takeaways and figures"
+                >
+                  ⚡ Concise
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnswerMode("academic")}
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
+                    answerMode === "academic"
+                      ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
+                      : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                  }`}
+                  title="Rigorous scholarly analysis with LaTeX math derivations and methodology"
+                >
+                  🎓 Academic
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnswerMode("step_by_step")}
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-all ${
+                    answerMode === "step_by_step"
+                      ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-700 dark:text-indigo-300 font-semibold"
+                      : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                  }`}
+                  title="Sequential procedural instructions with numbered steps and verification"
+                >
+                  🔢 Step-by-Step
+                </button>
+              </div>
+            </div>
+          </div>
 
           <div className="flex items-end gap-2">
             <textarea
