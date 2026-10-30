@@ -225,7 +225,7 @@ async def global_exception_handler(_request: Request, exc: Exception):
 # --------------------------------------------------------------------------- #
 class Message(BaseModel):
     role: str = Field(..., max_length=20)
-    content: str = Field(..., max_length=MAX_QUERY_CHARS * 2)
+    content: str = Field(..., max_length=65536)
 
 
 class ChatRequest(BaseModel):
@@ -850,7 +850,7 @@ def chat(request: ChatRequest):
     recent_history = request.history[-MAX_HISTORY_ITEMS:]
     for msg in recent_history:
         role = "model" if msg.role == "assistant" else "user"
-        gemini_history.append({"role": role, "parts": [msg.content]})
+        gemini_history.append({"role": role, "parts": [msg.content[:4000]]})
 
     try:
         chat_session = generation_model.start_chat(history=gemini_history)

@@ -75,6 +75,14 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertIn("Section 1", chunks[0])
         self.assertIn("Section 2", chunks[1])
 
+    def test_chat_long_history_allowed(self):
+        # Long assistant responses in history (e.g. 5000+ chars) should not fail validation with 400
+        res = self.client.post("/chat", json={
+            "query": "What is inside this document?",
+            "history": [{"role": "assistant", "content": "x" * 6000}],
+        })
+        self.assertNotEqual(res.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

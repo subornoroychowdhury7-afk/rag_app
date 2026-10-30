@@ -361,7 +361,7 @@ export default function Chat({
     try {
       const history = messages
         .filter((m) => !m.isError)
-        .map((m) => ({ role: m.role, content: m.content }));
+        .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
 
       const res = await sendChat(query, history, selectedDocFilter, answerMode);
       setMessages((m) => [
