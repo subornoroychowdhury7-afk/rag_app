@@ -7,7 +7,6 @@ A Retrieval-Augmented Generation (RAG) application that lets you ask natural-lan
 | Surface | URL |
 |---|---|
 | Frontend (Vercel) | https://rag-app-blush.vercel.app |
-| Frontend (GitHub Pages) | https://subornoroychowdhury7-afk.github.io/rag_app/ |
 | Backend API (Render) | https://rag-app-1-rqg6.onrender.com |
 | API docs (Swagger UI) | https://rag-app-1-rqg6.onrender.com/docs |
 
@@ -55,7 +54,7 @@ If no chunk passes the distance cutoff, the API returns a fixed fallback message
 |---|---|---|
 | Backend API | FastAPI (Python 3.12) | REST endpoints, request validation, CORS |
 | Vector store | ChromaDB | Persistent local store (HNSW/cosine) or Chroma Cloud |
-| Embeddings & generation | Google Gemini (`google-generativeai`) | `gemini-embedding-2` for vectors, `gemini-2.5-flash` for answers and summaries |
+| Embeddings & generation | Google Gemini (`google-generativeai`) | `gemini-embedding-2` for vectors, `gemini-3.5-flash` for answers and summaries |
 | PDF processing | PyMuPDF, pytesseract, Pillow | Text extraction and per-page OCR |
 | Frontend | Next.js 16 + React 19 + TypeScript | App Router SPA |
 | Styling | Tailwind CSS v4 | Utility-first styling |
@@ -115,7 +114,7 @@ Open `http://localhost:3000`.
 | `GEMINI_API_KEY` | — | **Required.** Embeddings, generation, and OCR fallback |
 | `EMBEDDING_MODEL` | `models/gemini-embedding-2` | |
 | `EMBEDDING_DIM` | `768` | |
-| `GENERATION_MODEL` | `gemini-2.5-flash` | |
+| `GENERATION_MODEL` | `gemini-3.5-flash` | |
 | `CHUNK_SIZE` | `1800` | Characters per chunk |
 | `CHUNK_OVERLAP` | `300` | Overlap between adjacent chunks |
 | `MAX_DISTANCE` | `0.75` | Cosine distance cutoff (0 = identical) |
