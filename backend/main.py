@@ -78,8 +78,8 @@ TOP_K = int((os.getenv("TOP_K") or "12").strip())                  # Retrieve 12
 MAX_DISTANCE = float((os.getenv("MAX_DISTANCE") or "0.78").strip())
 
 MAX_UPLOAD_MB = int((os.getenv("MAX_UPLOAD_MB") or "20").strip())
-MAX_QUERY_CHARS = 2000
-MAX_HISTORY_ITEMS = 30
+MAX_QUERY_CHARS = int((os.getenv("MAX_QUERY_CHARS") or "10000").strip())
+MAX_HISTORY_ITEMS = int((os.getenv("MAX_HISTORY_ITEMS") or "100").strip())
 MAX_RETRIES = 4
 
 NO_ANSWER = "I cannot answer this based on the uploaded documents."
@@ -365,7 +365,7 @@ def contextualize_query(query: str, history: list[Message]) -> str:
     if not history or not API_KEY_OK:
         return query
 
-    recent = history[-4:]
+    recent = history[-8:]
     ambiguous_indicators = {
         "it", "this", "that", "these", "those", "they", "them", "their", "its",
         "he", "she", "his", "her", "why", "how", "what about", "and", "explain more",
@@ -377,7 +377,7 @@ def contextualize_query(query: str, history: list[Message]) -> str:
     if not is_likely_followup:
         return query
 
-    history_text = "\n".join(f"{m.role}: {m.content[:200]}" for m in recent)
+    history_text = "\n".join(f"{m.role}: {m.content[:500]}" for m in recent)
     prompt = (
         "Given the conversation history and the user's latest follow-up question, rewrite the question "
         "into a single, standalone search query that includes all relevant subjects, entities, and context "
@@ -850,7 +850,7 @@ def chat(request: ChatRequest):
     recent_history = request.history[-MAX_HISTORY_ITEMS:]
     for msg in recent_history:
         role = "model" if msg.role == "assistant" else "user"
-        gemini_history.append({"role": role, "parts": [msg.content[:4000]]})
+        gemini_history.append({"role": role, "parts": [msg.content[:16000]]})
 
     try:
         chat_session = generation_model.start_chat(history=gemini_history)

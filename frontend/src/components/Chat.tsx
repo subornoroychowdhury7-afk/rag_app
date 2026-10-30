@@ -176,7 +176,7 @@ function formatTime(date: Date): string {
 
 /* ---------- Main component ---------------------------------------- */
 
-const MAX_CHARS = 2000;
+const MAX_CHARS = 10000;
 
 interface SpeechRecognitionEventLike {
   results?: {
@@ -361,7 +361,7 @@ export default function Chat({
     try {
       const history = messages
         .filter((m) => !m.isError)
-        .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+        .map((m) => ({ role: m.role, content: m.content.slice(0, 32000) }));
 
       const res = await sendChat(query, history, selectedDocFilter, answerMode);
       setMessages((m) => [

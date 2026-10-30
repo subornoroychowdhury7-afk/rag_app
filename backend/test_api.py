@@ -1,6 +1,6 @@
 import unittest
 from fastapi.testclient import TestClient
-from main import app, sanitize_filename, NO_ANSWER, compute_keyword_score, chunk_text
+from main import app, sanitize_filename, NO_ANSWER, compute_keyword_score, chunk_text, MAX_QUERY_CHARS
 
 
 class ApiEndpointsTestCase(unittest.TestCase):
@@ -41,7 +41,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
 
     def test_chat_query_too_long(self):
-        long_query = "x" * 2005
+        long_query = "x" * (MAX_QUERY_CHARS + 5)
         res = self.client.post("/chat", json={"query": long_query})
         self.assertEqual(res.status_code, 400)
 
