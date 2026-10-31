@@ -114,7 +114,7 @@ HF_MODELS: list[str] = (
 HF_API_BASE = "https://api-inference.huggingface.co/models"
 HF_ROUTER_BASE = "https://router.huggingface.co/v1/chat/completions"
 HF_MAX_NEW_TOKENS = int((os.getenv("HF_MAX_NEW_TOKENS") or "2048").strip())
-HF_TIMEOUT = int((os.getenv("HF_TIMEOUT") or "12").strip())
+HF_TIMEOUT = int((os.getenv("HF_TIMEOUT") or "40").strip())
 
 if HF_API_OK:
     logger.info("HuggingFace fallback chain configured with %d models.", len(HF_MODELS))
@@ -520,10 +520,14 @@ def prepare_prompt_for_hf(prompt: str, max_chars: int = 9000) -> str:
 
 def _call_hf_router(prompt: str, model_id: str) -> str:
     """Query Hugging Face's modern Inference Providers Router (OpenAI chat completions format)."""
+    # Use :fastest provider alias if not already specified for instant provider selection
+    router_model = model_id if ":" in model_id else f"{model_id}:fastest"
     payload = json.dumps({
-        "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": min(HF_MAX_NEW_TOKENS, 2048),
+        "model": router_model,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": min(HF_MAX_NEW_TOKENS, 1500),
         "temperature": GENERATION_TEMPERATURE,
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -532,6 +536,7 @@ def _call_hf_router(prompt: str, model_id: str) -> str:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {HF_API_TOKEN}",
+            "User-Agent": "DocQnA/1.0",
         },
         method="POST",
     )
@@ -543,19 +548,22 @@ def _call_hf_router(prompt: str, model_id: str) -> str:
             content = msg.get("content") or choices[0].get("text") or ""
             if content.strip():
                 return content.strip()
-    raise _HFError("unavailable", "Empty content from HF router")
+    raise _HFError("unavailable", f"Empty content from HF router for {router_model}")
 
 
 def _call_hf_legacy(prompt: str, model_id: str) -> str:
-    """Query Hugging Face's classic models endpoint."""
-    url = f"{HF_API_BASE}/{model_id}"
+    """Query Hugging Face's classic serverless models endpoint."""
+    clean_model_id = model_id.split(":")[0]
+    url = f"{HF_API_BASE}/{clean_model_id}"
     payload = json.dumps({
         "inputs": prompt,
         "parameters": {
-            "max_new_tokens": min(HF_MAX_NEW_TOKENS, 2048),
-            "temperature": GENERATION_TEMPERATURE,
+            "max_new_tokens": min(HF_MAX_NEW_TOKENS, 1024),
             "return_full_text": False,
-            "do_sample": True,
+        },
+        "options": {
+            "wait_for_model": True,
+            "use_cache": True,
         },
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -564,6 +572,7 @@ def _call_hf_legacy(prompt: str, model_id: str) -> str:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {HF_API_TOKEN}",
+            "User-Agent": "DocQnA/1.0",
         },
         method="POST",
     )
@@ -966,6 +975,40 @@ def extract_pdf_text(contents: bytes) -> str:
 # --------------------------------------------------------------------------- #
 # Endpoints
 # --------------------------------------------------------------------------- #
+
+@app.get("/debug-hf")
+def debug_hf(model: str = "Qwen/Qwen2.5-7B-Instruct"):
+    """Diagnostic endpoint to inspect live Hugging Face API responses and latency."""
+    started = time.perf_counter()
+    router_err = None
+    legacy_err = None
+    prompt = "Hello! Please answer in 1 sentence: what is 2 + 2?"
+
+    router_res = None
+    try:
+        router_res = _call_hf_router(prompt, model)
+    except Exception as e:
+        router_err = f"{type(e).__name__}: {e}"
+
+    legacy_res = None
+    try:
+        legacy_res = _call_hf_legacy(prompt, model)
+    except Exception as e:
+        legacy_err = f"{type(e).__name__}: {e}"
+
+    elapsed = round(time.perf_counter() - started, 2)
+    return {
+        "model": model,
+        "elapsed_seconds": elapsed,
+        "hf_configured": HF_API_OK,
+        "hf_token_prefix": HF_API_TOKEN[:6] + "..." if HF_API_TOKEN else "none",
+        "router_result": router_res,
+        "router_error": router_err,
+        "legacy_result": legacy_res,
+        "legacy_error": legacy_err,
+    }
+
+
 @app.get("/health")
 def health():
     return {
