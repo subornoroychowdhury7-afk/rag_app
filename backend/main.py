@@ -52,7 +52,7 @@ EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").
 EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
 # Generation model
-GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.5-flash").strip()
+GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.8-flash-lite").strip()
 GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
 # --------------------------------------------------------------------------- #
 # HuggingFace Inference API Configuration (fallback chain)
