@@ -54,12 +54,12 @@ export default function LandingView({
         </svg>
       ),
       failReason:
-        "Standard online chatbots (ChatGPT wrappers, generic PDF bots) invent plausible-sounding answers, fictitious statistics, or fabricated contract clauses when information does not exist in your file.",
+        "Standard online chatbots (generic PDF bots, ChatGPT wrappers) invent plausible-sounding answers, fictitious statistics, or fabricated contract clauses when information does not exist in your file.",
       docQASolution:
-        "DocQ&A enforces a mathematical cosine distance cutoff (MAX_DISTANCE = 0.75). If no retrieved chunk passes this threshold, the API strictly returns the honest refusal: 'I cannot answer this based on the uploaded documents.' The system prompt strictly prohibits external knowledge.",
-      codeProof: "Verified in backend/main.py (lines 76, 83-91, 559-581)",
+        "DocQ&A enforces a mathematical cosine distance cutoff (MAX_DISTANCE = 0.78 with hybrid keyword adjustment). If no retrieved chunk passes this threshold, the API strictly returns the honest refusal: 'I cannot answer this based on the uploaded documents.' The system prompt strictly prohibits outside knowledge.",
+      codeProof: "Verified in backend/main.py (lines 65-74, 103-120, 708-726)",
       proofDetails: [
-        "MAX_DISTANCE = 0.75 strict cosine distance cutoff",
+        "MAX_DISTANCE = 0.78 strict cosine distance cutoff with hybrid keyword boost",
         "Zero-hallucination fallback: fixed string returned if no chunks pass",
         "System prompt forbids outside knowledge and forces quotation of context",
       ],
@@ -78,7 +78,7 @@ export default function LandingView({
         "Almost all web-based PDF chatbots extract only embedded digital font glyphs. Scanned agreements, archived research papers, receipts, or photocopies extract 0 bytes of text and fail silently or throw 'corrupted file' errors.",
       docQASolution:
         "DocQ&A runs a dual-layer extraction engine. PyMuPDF extracts native digital text; if any page has no selectable text, it is rendered at 200 DPI into high-resolution images and run through Tesseract OCR. If Tesseract is unavailable on the host, it automatically delegates to Gemini 3.8 Flash's native multimodal PDF vision transcription.",
-      codeProof: "Verified in backend/main.py (lines 313-401: extract_pdf_text & ocr_pdf_with_gemini)",
+      codeProof: "Verified in backend/main.py (lines 192-360: extract_pdf_text & ocr_pdf_with_gemini)",
       proofDetails: [
         "PyMuPDF per-page selectable text analysis",
         "Automatic fallback to 200 DPI pixmap rendering + Tesseract OCR",
@@ -98,7 +98,7 @@ export default function LandingView({
         "Generic PDF software breaks complex scientific, financial, or engineering notation into garbled ASCII mush (superscripts, subscripts, integral signs, and matrices get mangled or stripped completely).",
       docQASolution:
         "DocQ&A's prompt requires Gemini to write all mathematical reasoning, steps, and formulas in standard LaTeX ($...$ and $$...$$). The frontend renders every equation dynamically using KaTeX with horizontal scroll protection for wide equations.",
-      codeProof: "Verified in backend/main.py (lines 105-108) & frontend MarkdownRenderer.tsx (lines 19-24)",
+      codeProof: "Verified in backend/main.py (lines 103-130) & frontend MarkdownRenderer.tsx (lines 43-65)",
       proofDetails: [
         "Backend prompt mandates LaTeX formatting ($...$ and $$...$$) & step-by-step working",
         "Frontend remark-math + rehype-katex rendering engine",
@@ -117,10 +117,10 @@ export default function LandingView({
       failReason:
         "Existing software displays vague footnotes like '[1]' with no way to see what snippet was actually retrieved from the document, hiding potential model hallucinations.",
       docQASolution:
-        "Every DocQ&A response includes collapsible source cards disclosing the exact chunk verbatim text, source filename, chunk index, a 1-click copy quote button, and a calculated cosine relevance match score: relevance = round((1.0 - distance) * 100)%.",
-      codeProof: "Verified in backend/main.py (lines 558-570) & frontend Chat.tsx (lines 89-138)",
+        "Every DocQ&A response includes collapsible source cards disclosing the exact chunk verbatim text, source filename, chunk index, a 1-click copy quote button, and a calculated hybrid relevance match score combining dense vector similarity and keyword scoring.",
+      codeProof: "Verified in backend/main.py (lines 696-725) & frontend Chat.tsx (lines 80-145)",
       proofDetails: [
-        "Cosine similarity match score calculated directly from vector distance",
+        "Hybrid similarity match score calculated directly from vector distance + BM25 keyword overlap",
         "Exact chunk index and filename provenance attached to every message",
         "One-click copy button for verbatim source evidence verification",
       ],
@@ -138,7 +138,7 @@ export default function LandingView({
         "When users upload multiple files (e.g., 'Q1_Report.pdf' and 'Q2_Report.pdf'), generic tools combine all documents into one bag of words, mixing numbers and facts across different documents without scoping.",
       docQASolution:
         "DocQ&A features an active document filter. When selected, the backend restricts ChromaDB cosine vector search strictly using where={'source': filename}, mathematically isolating queries to a single document index.",
-      codeProof: "Verified in backend/main.py (lines 518-526) & frontend Sidebar.tsx (lines 280-310)",
+      codeProof: "Verified in backend/main.py (lines 685-695) & frontend Sidebar.tsx (lines 220-250)",
       proofDetails: [
         "ChromaDB metadata-level filtering via where={'source': filename}",
         "Per-document chunk counting, inspection, and one-click deletion",
@@ -158,7 +158,7 @@ export default function LandingView({
         "Reading a 50+ page legal brief, financial audit, or technical spec to locate strategic findings takes hours. Typical chatbots provide brief, superficial summaries that overlook critical numbers.",
       docQASolution:
         "DocQ&A features a specialized AI Executive Briefing endpoint (/documents/{filename}/summarize). It aggregates the document's sequential chunks and runs a dedicated 4-section executive prompt: Executive Overview, Key Highlights & Critical Data, Strategic Takeaways & Risks, and Recommended Inquiries.",
-      codeProof: "Verified in backend/main.py (lines 623-676) & frontend SummaryModal.tsx",
+      codeProof: "Verified in backend/main.py (lines 841-890) & frontend SummaryModal.tsx",
       proofDetails: [
         "Dedicated executive synthesis prompt with 4 standardized sections",
         "Includes actionable strategic recommendations and risk vectors",
@@ -275,7 +275,7 @@ export default function LandingView({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
             </span>
-            <span>Zero-Hallucination Fallback Guardrail • 768-Dim Gemini Embeddings</span>
+            <span>Gemini 3.8 Flash • Deep Thinking Mode • Hybrid Dense + Lexical Search</span>
           </div>
 
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-slate-900 dark:text-white">
@@ -287,8 +287,8 @@ export default function LandingView({
 
           <p className="mx-auto mt-6 max-w-3xl text-base leading-relaxed text-slate-600 dark:text-slate-300 sm:text-lg">
             Upload PDFs, scanned documents, TXT, or Markdown files. DocQ&amp;A searches your documents with
-            cosine vector similarity and produces rigorously cited answers with exact cosine match percentages,
-            mathematical LaTeX proofs, and 1-click executive briefings.
+            768-dim dense vector embeddings and BM25 hybrid ranking, answering with step-by-step deep thinking,
+            mathematical LaTeX proofs, verifiable source citations, and executive briefings.
           </p>
 
           {/* Interactive Hero Dropzone / Launchpad */}
@@ -391,8 +391,8 @@ export default function LandingView({
               <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Tesseract + Vision</div>
             </div>
             <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-cyan-400 hover:shadow-xl hover:shadow-cyan-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-cyan-500">
-              <div className="text-2xl font-black text-cyan-600 transition-transform duration-300 group-hover:scale-110 dark:text-cyan-400">Zero Auth</div>
-              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">No Account Required</div>
+              <div className="text-2xl font-black text-cyan-600 transition-transform duration-300 group-hover:scale-110 dark:text-cyan-400">Deep CoT</div>
+              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Gemini 3.8 Flash Thinking</div>
             </div>
           </div>
         </section>
@@ -424,7 +424,7 @@ export default function LandingView({
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
                 Powered by ChromaDB with persistent HNSW index and cosine space. Your document segments are
-                chunked into 1,800-character windows with 300-character overlap to retain context across boundaries.
+                chunked into 1,800-character windows with 300-character overlap, re-ranked via hybrid BM25 keyword overlap.
               </p>
             </div>
 
@@ -453,7 +453,7 @@ export default function LandingView({
                 Guaranteed Citations &amp; Refusal
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Instead of making educated guesses, queries without passing vector similarity (distance &gt; 0.75)
+                Instead of making speculative guesses, queries without passing vector similarity (distance &gt; 0.78)
                 refuse to generate unsupported answers. Every returned answer quotes its exact source chunk.
               </p>
             </div>
@@ -507,15 +507,14 @@ export default function LandingView({
                 </span>
               </div>
               <h3 className="mt-5 text-base font-bold text-slate-900 dark:text-slate-100">
-                Query in Natural Language
+                Query in 4 Answer Styles
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Ask specific questions, compare sections, or request derivations. You can query across all
-                uploaded documents or click the document pill in the sidebar to isolate retrieval strictly to
-                a single file.
+                Ask specific questions, compare sections, or request derivations via text or voice dictation.
+                Switch between Detailed, Concise, Academic, and Step-by-Step styles, or click document pills to scope search.
               </p>
               <div className="mt-4 rounded-xl bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
-                POST /chat → embed query → top-K cosine search → prompt synthesis
+                POST /chat → embed query → hybrid BM25 + cosine search → deep CoT synthesis
               </div>
             </div>
 
@@ -532,12 +531,11 @@ export default function LandingView({
                 Verify Citations &amp; Briefings
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Expand the Grounded Sources drawer below any answer to inspect verbatim chunk excerpts and
-                their exact relevance match percentage. Click 'AI Summary' for a one-click executive briefing,
-                or listen via voice dictation/speech synthesis.
+                Expand the Thinking Process drawer to inspect step-by-step reasoning, check verbatim chunk excerpts and
+                their exact relevance match percentage, listen via Web Speech TTS, or generate 1-click executive briefings.
               </p>
               <div className="mt-4 rounded-xl bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
-                Answer + Citations (% Match) + Follow-ups + Audio TTS + LaTeX
+                Answer + CoT Thinking + Citations (% Match) + Follow-ups + Audio TTS
               </div>
             </div>
           </div>
@@ -583,7 +581,7 @@ export default function LandingView({
                     </td>
                     <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
                       <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Enforces a hard cosine cutoff (0.75). Refuses to answer if evidence is absent, strictly returning honest refusal.
+                      Enforces a hard cosine cutoff (0.78). Refuses to answer if evidence is absent, strictly returning honest refusal.
                     </td>
                   </tr>
 
@@ -597,7 +595,21 @@ export default function LandingView({
                     </td>
                     <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
                       <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Automatic multi-tier OCR: PyMuPDF + Tesseract 200 DPI OCR + Gemini Multimodal Vision transcription.
+                      Automatic multi-tier OCR: PyMuPDF + Tesseract 200 DPI OCR + Gemini 3.8 Flash Multimodal Vision transcription.
+                    </td>
+                  </tr>
+
+                  <tr className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                    <td className="px-5 py-4 font-semibold text-slate-900 dark:text-slate-100">
+                      AI Deep Thinking Mode
+                    </td>
+                    <td className="px-5 py-4 text-slate-600 dark:text-slate-400">
+                      <span className="inline-flex items-center text-rose-500 mr-1.5 font-bold">✕</span>
+                      Black-box one-shot generation without observable reasoning or cross-passage evidence auditing.
+                    </td>
+                    <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
+                      <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
+                      Enforces internal &lt;thinking&gt; protocol to deconstruct problems, audit facts, and verify claims in an interactive UI card.
                     </td>
                   </tr>
 
@@ -611,7 +623,7 @@ export default function LandingView({
                     </td>
                     <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
                       <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Prompts step-by-step LaTeX derivations rendered dynamically with KaTeX in the browser.
+                      Prompts step-by-step LaTeX derivations ($...$ and $$...$$) rendered dynamically with KaTeX in the browser.
                     </td>
                   </tr>
 
@@ -808,7 +820,7 @@ export default function LandingView({
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-600 dark:text-slate-400">
               Click through interactive examples below to see real output generated with LaTeX formulas,
-              verifiable source citations, and executive briefings.
+              deep reasoning CoT, verifiable source citations, and executive briefings.
             </p>
           </div>
 
@@ -863,22 +875,39 @@ export default function LandingView({
               <div>
                 <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
                   <div className="text-xs font-semibold text-slate-500">
-                    User Query: <span className="font-mono text-indigo-600 dark:text-indigo-400">"Derive the black-scholes equation step or calculate the vector cosine similarity equation."</span>
+                    User Query: <span className="font-mono text-indigo-600 dark:text-indigo-400">&quot;Derive the vector cosine similarity equation and hybrid re-ranking score.&quot;</span>
                   </div>
                   <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
-                    KaTeX Rendered
+                    KaTeX + CoT Verified
                   </span>
                 </div>
+
+                {/* Collapsible Thinking Process card like in actual Chat */}
+                <details className="mb-4 group rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-3 text-xs dark:border-indigo-900/60 dark:bg-indigo-950/40" open>
+                  <summary className="flex cursor-pointer select-none items-center gap-1.5 font-semibold text-indigo-900 dark:text-indigo-300">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-white text-[11px]">🧠</span>
+                    <span>AI Thinking Process &amp; Verification</span>
+                    <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500 ml-auto">Verified against Section 4</span>
+                  </summary>
+                  <div className="mt-2.5 whitespace-pre-wrap border-t border-indigo-100 pt-2.5 font-mono text-[11px] leading-relaxed text-slate-600 dark:border-indigo-900/40 dark:text-slate-300">
+                    1. DECONSTRUCT QUESTION: User requests mathematical formulation of cosine similarity and hybrid scoring formula in R^768.
+                    2. EVIDENCE AUDIT: Section 4 defines vector dimension d=768, cosine space, and BM25 hybrid blending ratio (0.65 vector + 0.35 keyword).
+                    3. SYNTHESIS: Format explicit LaTeX equations ($...$ and $$...$$), define all variables, and present step-by-step verification.
+                  </div>
+                </details>
+
                 <MarkdownRenderer
                   content={`Based on Section 4 of the uploaded technical paper, the cosine similarity between the query vector $\\mathbf{q}$ and chunk vector $\\mathbf{d}$ in $\\mathbb{R}^{768}$ is computed as:
 
 $$\\text{Sim}(\\mathbf{q}, \\mathbf{d}) = \\frac{\\mathbf{q} \\cdot \\mathbf{d}}{\\|\\mathbf{q}\\| \\|\\mathbf{d}\\|} = \\frac{\\sum_{i=1}^{768} q_i d_i}{\\sqrt{\\sum_{i=1}^{768} q_i^2} \\sqrt{\\sum_{i=1}^{768} d_i^2}}$$
 
-### Step-by-Step Distance Calculation
+### Step-by-Step Distance & Hybrid Score Calculation
 1. **Cosine Distance**: Computed as $D_{\\text{cosine}} = 1.0 - \\text{Sim}(\\mathbf{q}, \\mathbf{d})$.
-2. **Relevance Metric**: For human readability, DocQ&A converts this into percentage match:
-   $$\\text{Relevance (\\%)} = \\max\\left(10, \\min\\left(99, \\text{round}\\left((1.0 - D_{\\text{cosine}}) \\times 100\\right)\\right)\\right)$$
-3. **Threshold Gate**: If $D_{\\text{cosine}} > 0.75$, the chunk is discarded from generation context.`}
+2. **Hybrid Composite Score**: Incorporates BM25 keyword overlap $S_{\\text{kw}}$ to prioritize exact technical names:
+   $$S_{\\text{composite}} = 0.65 \\cdot \\text{Sim}(\\mathbf{q}, \\mathbf{d}) + 0.35 \\cdot S_{\\text{kw}}$$
+3. **Relevance Percentage**: For human readability, DocQ&A maps this into an intuitive percentage match:
+   $$\\text{Relevance (\\%)} = \\max\\left(15, \\min\\left(99, \\text{round}\\left(S_{\\text{composite}} \\times 100\\right)\\right)\\right)$$
+4. **Threshold Gate**: If $D_{\\text{cosine}} > 0.78$, the chunk is discarded from generation context.`}
                 />
               </div>
             )}
@@ -887,7 +916,7 @@ $$\\text{Sim}(\\mathbf{q}, \\mathbf{d}) = \\frac{\\mathbf{q} \\cdot \\mathbf{d}}
               <div>
                 <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
                   <div className="text-xs font-semibold text-slate-500">
-                    User Query: <span className="font-mono text-rose-600 dark:text-rose-400">"What was the company's 2028 projected revenue in this 2023 report?"</span>
+                    User Query: <span className="font-mono text-rose-600 dark:text-rose-400">&quot;What was the company&apos;s 2028 projected revenue in this 2023 report?&quot;</span>
                   </div>
                   <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-950/60 dark:text-rose-300">
                     Cosine Cutoff Triggered
@@ -904,7 +933,7 @@ $$\\text{Sim}(\\mathbf{q}, \\mathbf{d}) = \\frac{\\mathbf{q} \\cdot \\mathbf{d}}
                     &quot;I cannot answer this based on the uploaded documents.&quot;
                   </p>
                   <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                    Unlike standard bots that invent speculative projections, DocQ&amp;A confirms all retrieved chunks exceeded the 0.75 distance threshold and terminates generation rather than feeding false information to the user.
+                    Unlike standard bots that invent speculative projections, DocQ&amp;A confirms all retrieved chunks exceeded the 0.78 distance threshold and terminates generation rather than feeding false information to the user.
                   </p>
                 </div>
               </div>
@@ -921,7 +950,7 @@ $$\\text{Sim}(\\mathbf{q}, \\mathbf{d}) = \\frac{\\mathbf{q} \\cdot \\mathbf{d}}
                   </span>
                 </div>
                 <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
-                  According to Article 14.2 of the master vendor agreement, the termination notice period requires <strong>60 calendar days written notice</strong> via certified courier.
+                  According to Article 14.2 of the master vendor agreement, the termination notice period requires <strong>60 calendar days written notice</strong> via certified courier <span className="font-mono text-indigo-600 dark:text-indigo-400">[Vendor_Master_Contract_2024.pdf]</span>.
                 </p>
 
                 {/* Grounded Source Drawer Preview */}
