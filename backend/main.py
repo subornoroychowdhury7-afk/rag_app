@@ -52,7 +52,7 @@ EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").
 EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
 # Generation model
-GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-2.5-flash").strip()
+GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-1.5-flash").strip()
 GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
 # --------------------------------------------------------------------------- #
 # HuggingFace Inference API Configuration (fallback chain)
@@ -634,7 +634,11 @@ def _format_model_response(text: str) -> str:
 
 
 def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[str]:
-    """Dynamically prioritize frontier Hugging Face models tailored to the user's workflow."""
+    """Dynamically prioritize frontier Hugging Face models tailored to the user's workflow.
+
+    Includes both elite 32B/70B reasoning models and instant free-tier 7B/8B models so that
+    it succeeds immediately whether the user has Inference Provider credits or free serverless.
+    """
     q_lower = query.lower()
     m_lower = (mode or "detailed").lower()
 
@@ -658,36 +662,43 @@ def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[
     if is_code or m_lower == "step_by_step":
         preferred = [
             "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "Qwen/Qwen2.5-7B-Instruct",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+            "microsoft/Phi-3.5-mini-instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
             "microsoft/phi-4",
             "Qwen/Qwen2.5-72B-Instruct",
-            "mistralai/Mistral-Small-24B-Instruct-2501",
         ]
     elif is_math or m_lower == "academic":
         preferred = [
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
             "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "Qwen/Qwen2.5-7B-Instruct",
             "Qwen/Qwen2.5-72B-Instruct",
+            "google/gemma-2-9b-it",
             "google/gemma-2-27b-it",
-            "meta-llama/Llama-3.3-70B-Instruct",
         ]
     elif m_lower == "concise":
         preferred = [
-            "mistralai/Mistral-Small-24B-Instruct-2501",
-            "google/gemma-2-9b-it",
-            "meta-llama/Meta-Llama-3.1-8B-Instruct",
             "mistralai/Mistral-7B-Instruct-v0.3",
+            "google/gemma-2-9b-it",
             "Qwen/Qwen2.5-7B-Instruct",
+            "meta-llama/Meta-Llama-3.1-8B-Instruct",
+            "mistralai/Mistral-Small-24B-Instruct-2501",
+            "HuggingFaceH4/zephyr-7b-beta",
         ]
     else:  # detailed (default)
         preferred = [
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+            "Qwen/Qwen2.5-7B-Instruct",
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "mistralai/Mistral-7B-Instruct-v0.3",
             "Qwen/Qwen2.5-72B-Instruct",
-            "meta-llama/Llama-3.3-70B-Instruct",
-            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-            "mistralai/Mistral-Small-24B-Instruct-2501",
-            "google/gemma-2-27b-it",
+            "google/gemma-2-9b-it",
+            "HuggingFaceH4/zephyr-7b-beta",
+            "meta-llama/Meta-Llama-3.1-8B-Instruct",
         ]
 
     seen = set()
@@ -706,36 +717,47 @@ def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[
 
 
 def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, str]:
-    """Call Google Gemini with automatic fallback across valid model versions if model not found."""
-    # Build list of models to try: user configured model first, followed by known stable versions
+    """Call Google Gemini with automatic fallback across known active models."""
     configured_model = GENERATION_MODEL.strip()
-    fallbacks = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-pro"]
-    candidates = [configured_model] + [f for f in fallbacks if f != configured_model]
+    candidates = [
+        configured_model,
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
+        "gemini-1.5-pro",
+    ]
+    seen = set()
+    models_to_try = []
+    for m in candidates:
+        if m and m not in seen:
+            seen.add(m)
+            models_to_try.append(m)
 
     last_exc = None
-    for m_name in candidates:
+    for m_name in models_to_try:
         try:
             logger.info("Attempting Gemini generation with model: %s", m_name)
             gm = genai.GenerativeModel(m_name, generation_config=_generation_config)
             chat_session = gm.start_chat(history=gemini_history)
             response = call_gemini(chat_session.send_message, prompt)
             return response.text, m_name
-        except gexc.NotFound as not_found_exc:
-            logger.warning("Gemini model '%s' not found on Google API (404) — trying next valid Gemini model...", m_name)
-            last_exc = not_found_exc
-            continue
-        except ValueError as exc:
-            raise HTTPException(502, "The model returned no answer (blocked or empty). Try rephrasing your question.") from exc
         except Exception as exc:
-            if "not found" in str(exc).lower():
-                logger.warning("Gemini model '%s' returned not found — trying next valid Gemini model...", m_name)
+            exc_str = str(exc).lower()
+            model_error_signals = (
+                "not found", "no longer available", "deprecated", "not supported",
+                "invalid model", "does not exist", "unsupported", "is not available",
+            )
+            if any(sig in exc_str for sig in model_error_signals):
+                logger.warning("Gemini model '%s' unavailable (%s) — trying next fallback model...", m_name, exc)
                 last_exc = exc
                 continue
+            if isinstance(exc, gexc.ResourceExhausted) or "quota" in exc_str:
+                raise to_http_error(exc, "Generation") from exc
             last_exc = exc
-            raise to_http_error(exc, "Generation") from exc
+            continue
 
     if last_exc:
-        raise to_http_error(last_exc, "Generation")
+        raise to_http_error(last_exc, "Generation") from last_exc
     raise HTTPException(502, "All Gemini generation models failed.")
 
 
@@ -754,7 +776,6 @@ def generate_with_fallback(
     # ── 1. Primary: Hugging Face Frontier Models Tailored to Workflow ─────────
     if HF_API_OK:
         model_candidates = select_models_for_workflow(query=query, mode=mode)
-        # Try at most 6 top candidates to ensure rapid response time
         for model_id in model_candidates[:8]:
             try:
                 answer = call_huggingface_model(prompt, model_id)
@@ -762,7 +783,6 @@ def generate_with_fallback(
                 return answer, model_id
             except _HFError as hf_err:
                 logger.warning("HF model %s failed (%s) — rotating to next candidate.", model_id, hf_err.reason)
-                # Rotate immediately to the next warm model without blocking sleeps!
                 continue
             except Exception as exc:
                 logger.warning("HF model %s unexpected error (%s) — rotating to next candidate.", model_id, exc)
