@@ -24,6 +24,7 @@ export interface ChatResult {
   citations?: Citation[];
   suggested_followups?: string[];
   model_used?: string;
+  fallback_reason?: string;
 }
 
 export interface DocumentSummaryResult {

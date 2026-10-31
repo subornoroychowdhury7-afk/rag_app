@@ -116,6 +116,11 @@ HF_ROUTER_BASE = "https://router.huggingface.co/v1/chat/completions"
 HF_MAX_NEW_TOKENS = int((os.getenv("HF_MAX_NEW_TOKENS") or "2048").strip())
 HF_TIMEOUT = int((os.getenv("HF_TIMEOUT") or "40").strip())
 
+# Optional Groq API configuration (Free frontier open-weights: DeepSeek-R1, Qwen2.5, Llama 3.3)
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+GROQ_API_OK = bool(GROQ_API_KEY) and not GROQ_API_KEY.startswith("your_")
+GROQ_ROUTER_BASE = "https://api.groq.com/openai/v1/chat/completions"
+
 if HF_API_OK:
     logger.info("HuggingFace fallback chain configured with %d models.", len(HF_MODELS))
 else:
@@ -647,6 +652,35 @@ def _format_model_response(text: str) -> str:
     return text.strip()
 
 
+def call_groq_model(prompt: str, model_id: str) -> str:
+    """Query free open-weights models (DeepSeek-R1, Qwen2.5, Llama 3.3) via Groq Cloud."""
+    payload = json.dumps({
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": GENERATION_TEMPERATURE,
+        "max_tokens": 4096,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        GROQ_ROUTER_BASE,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "User-Agent": "DocQnA/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=35) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+        choices = result.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            msg = choices[0].get("message") or {}
+            content = msg.get("content") or ""
+            if content.strip():
+                return _format_model_response(content.strip())
+    raise RuntimeError(f"Empty response from Groq model {model_id}")
+
+
 def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[str]:
     """Dynamically prioritize frontier Hugging Face models tailored to the user's workflow.
 
@@ -777,13 +811,16 @@ def generate_with_fallback(
     gemini_history: list[dict],
     query: str = "",
     mode: str = "detailed",
-) -> tuple[str, str]:
+) -> tuple[str, str, Optional[str]]:
     """Generate an answer using workflow-tailored frontier Hugging Face models as primary,
     rotating instantly through warm models on token/rate limits, with Gemini as safety backup.
 
     Returns:
-        tuple[str, str]: (generated_answer, model_name_used)
+        tuple[str, str, Optional[str]]: (generated_answer, model_name_used, fallback_reason)
     """
+    fallback_reason = None
+    last_hf_error = None
+
     # ── 1. Primary: Hugging Face Frontier Models Tailored to Workflow ─────────
     if HF_API_OK:
         model_candidates = select_models_for_workflow(query=query, mode=mode)
@@ -791,24 +828,53 @@ def generate_with_fallback(
             try:
                 answer = call_huggingface_model(prompt, model_id)
                 logger.info("Successfully generated answer using %s", model_id)
-                return answer, model_id
+                return answer, model_id, None
             except _HFError as hf_err:
                 logger.warning("HF model %s failed (%s) — rotating to next candidate.", model_id, hf_err.reason)
+                last_hf_error = hf_err.message
                 continue
             except Exception as exc:
                 logger.warning("HF model %s unexpected error (%s) — rotating to next candidate.", model_id, exc)
+                last_hf_error = str(exc)
                 continue
 
-        logger.warning("Hugging Face models unavailable or busy. Engaging Gemini safety net.")
+        if last_hf_error and ("402" in last_hf_error or "no remaining credits" in last_hf_error.lower()):
+            fallback_reason = "Hugging Face credits exhausted (HTTP 402: You have no remaining credits)."
+        elif last_hf_error:
+            fallback_reason = f"Hugging Face models unavailable ({last_hf_error[:70]})."
+        else:
+            fallback_reason = "Hugging Face models unavailable."
+
+        logger.warning("%s Engaging backup provider.", fallback_reason)
+    else:
+        fallback_reason = "HF_API_TOKEN not configured."
+
+    # ── 1.5. Secondary Open-Weights: Groq Cloud (Free DeepSeek-R1 / Qwen / Llama) ──
+    if GROQ_API_OK:
+        groq_candidates = [
+            "deepseek-r1-distill-llama-70b",
+            "qwen-2.5-32b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+        ]
+        for g_model in groq_candidates:
+            try:
+                ans = call_groq_model(prompt, g_model)
+                logger.info("Successfully generated answer using Groq %s", g_model)
+                return ans, f"groq/{g_model}", fallback_reason
+            except Exception as g_err:
+                logger.warning("Groq model %s failed (%s) — trying next candidate...", g_model, g_err)
+                continue
 
     # ── 2. Fallback: Gemini Safety Net with Auto-Model Fallback ──────────────
     if not API_KEY_OK:
         raise HTTPException(
             503,
-            "Hugging Face models are currently busy, and GEMINI_API_KEY is not configured.",
+            "Primary models unavailable, and GEMINI_API_KEY is not configured.",
         )
 
-    return generate_with_gemini(prompt, gemini_history)
+    ans, gemini_model = generate_with_gemini(prompt, gemini_history)
+    return ans, gemini_model, fallback_reason
 
 
 def call_gemini(fn, *args, **kwargs):
@@ -1018,6 +1084,7 @@ def health():
         "gemini_configured": API_KEY_OK,
         "hf_configured": HF_API_OK,
         "hf_models_count": len(HF_MODELS),
+        "groq_configured": GROQ_API_OK,
     }
 
 
@@ -1296,7 +1363,7 @@ def chat(request: ChatRequest):
         gemini_history.append({"role": role, "parts": [msg.content[:16000]]})
 
     try:
-        answer, model_used = generate_with_fallback(prompt, gemini_history, query=query, mode=mode_key)
+        answer, model_used, fallback_reason = generate_with_fallback(prompt, gemini_history, query=query, mode=mode_key)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1320,6 +1387,7 @@ def chat(request: ChatRequest):
         "citations": citations,
         "suggested_followups": suggested_followups,
         "model_used": model_used,
+        "fallback_reason": fallback_reason,
     }
 
 
@@ -1366,7 +1434,7 @@ Document Content:
 """
 
     try:
-        summary_md, model_used = generate_with_fallback(
+        summary_md, model_used, _ = generate_with_fallback(
             summary_prompt,
             gemini_history=[],
             query=clean_name,

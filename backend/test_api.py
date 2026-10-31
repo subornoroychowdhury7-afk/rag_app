@@ -91,7 +91,9 @@ class ApiEndpointsTestCase(unittest.TestCase):
         data = res.json()
         self.assertIn("hf_configured", data)
         self.assertIn("hf_models_count", data)
+        self.assertIn("groq_configured", data)
         self.assertIsInstance(data["hf_configured"], bool)
+        self.assertIsInstance(data["groq_configured"], bool)
         self.assertEqual(data["hf_models_count"], len(HF_MODELS))
 
     def test_hf_models_list_not_empty(self):
