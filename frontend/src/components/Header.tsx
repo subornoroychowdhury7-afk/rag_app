@@ -47,9 +47,62 @@ export default function Header({
           className="flex items-center gap-2 text-left focus:outline-hidden"
           title={currentView === "app" ? "View Product Guide & Architecture" : "Go to Workspace"}
         >
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-xs">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+          {/* DocQ&A custom logo */}
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg shadow-sm overflow-hidden">
+            <svg viewBox="0 0 512 512" className="h-8 w-8" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="hdr-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#4f46e5"/>
+                  <stop offset="50%" stopColor="#7c3aed"/>
+                  <stop offset="100%" stopColor="#a855f7"/>
+                </linearGradient>
+              </defs>
+              <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="url(#hdr-bg)"/>
+              {/* Document page */}
+              <path d="M152 96L320 96L368 144L368 416L152 416Z" fill="#fff" opacity={0.95}/>
+              <path d="M320 96L368 144L320 144Z" fill="#c7d2fe" opacity={0.8}/>
+              {/* Text lines */}
+              <rect x="180" y="168" width="148" height="8" rx="4" fill="#a5b4fc" opacity={0.6}/>
+              <rect x="180" y="192" width="120" height="8" rx="4" fill="#a5b4fc" opacity={0.5}/>
+              <rect x="180" y="216" width="156" height="8" rx="4" fill="#a5b4fc" opacity={0.6}/>
+              <rect x="180" y="240" width="100" height="8" rx="4" fill="#a5b4fc" opacity={0.4}/>
+              <rect x="180" y="264" width="140" height="8" rx="4" fill="#a5b4fc" opacity={0.55}/>
+              {/* Highlighted line */}
+              <rect x="176" y="290" width="164" height="16" rx="4" fill="#fbbf24" opacity={0.3}/>
+              <rect x="180" y="294" width="156" height="8" rx="4" fill="#f59e0b" opacity={0.9}/>
+              <rect x="180" y="320" width="130" height="8" rx="4" fill="#a5b4fc" opacity={0.5}/>
+              <rect x="180" y="344" width="148" height="8" rx="4" fill="#a5b4fc" opacity={0.45}/>
+              <rect x="180" y="368" width="110" height="8" rx="4" fill="#a5b4fc" opacity={0.4}/>
+              {/* Neural connections */}
+              <g stroke="#c084fc" strokeWidth="2.5" opacity={0.7}>
+                <line x1="340" y1="200" x2="388" y2="168"/><line x1="340" y1="200" x2="400" y2="224"/>
+                <line x1="340" y1="200" x2="372" y2="256"/><line x1="388" y1="168" x2="424" y2="132"/>
+                <line x1="388" y1="168" x2="432" y2="196"/><line x1="400" y1="224" x2="432" y2="196"/>
+                <line x1="400" y1="224" x2="440" y2="260"/><line x1="372" y1="256" x2="440" y2="260"/>
+                <line x1="372" y1="256" x2="396" y2="312"/><line x1="396" y1="312" x2="440" y2="260"/>
+                <line x1="396" y1="312" x2="360" y2="360"/><line x1="396" y1="312" x2="436" y2="340"/>
+                <line x1="436" y1="340" x2="440" y2="260"/><line x1="360" y1="360" x2="436" y2="340"/>
+              </g>
+              {/* Neural nodes */}
+              <circle cx="340" cy="200" r="10" fill="#e0e7ff" stroke="#818cf8" strokeWidth="2"/>
+              <circle cx="388" cy="168" r="7" fill="#c7d2fe" stroke="#a78bfa" strokeWidth="1.5"/>
+              <circle cx="400" cy="224" r="7" fill="#c7d2fe" stroke="#a78bfa" strokeWidth="1.5"/>
+              <circle cx="372" cy="256" r="8" fill="#ddd6fe" stroke="#8b5cf6" strokeWidth="1.5"/>
+              <circle cx="432" cy="196" r="6" fill="#ede9fe" stroke="#a78bfa" strokeWidth="1.5"/>
+              <circle cx="424" cy="132" r="5" fill="#f5f3ff" stroke="#c4b5fd" strokeWidth="1"/>
+              <circle cx="440" cy="260" r="7" fill="#c7d2fe" stroke="#a78bfa" strokeWidth="1.5"/>
+              <circle cx="396" cy="312" r="8" fill="#ddd6fe" stroke="#8b5cf6" strokeWidth="1.5"/>
+              <circle cx="360" cy="360" r="6" fill="#ede9fe" stroke="#a78bfa" strokeWidth="1.5"/>
+              <circle cx="436" cy="340" r="5" fill="#f5f3ff" stroke="#c4b5fd" strokeWidth="1"/>
+              {/* Magnifying glass */}
+              <g transform="translate(108, 280)">
+                <circle cx="0" cy="0" r="44" fill="none" stroke="#fff" strokeWidth="7" opacity={0.9}/>
+                <circle cx="0" cy="0" r="44" fill="none" stroke="#fbbf24" strokeWidth="4" opacity={0.6}/>
+                <line x1="30" y1="30" x2="60" y2="60" stroke="#fff" strokeWidth="7" strokeLinecap="round" opacity={0.9}/>
+                <line x1="30" y1="30" x2="60" y2="60" stroke="#fbbf24" strokeWidth="4" strokeLinecap="round" opacity={0.6}/>
+                <circle cx="-8" cy="-12" r="3" fill="#fbbf24" opacity={0.8}/>
+                <circle cx="10" cy="-4" r="2" fill="#fde68a" opacity={0.6}/>
+              </g>
             </svg>
           </span>
           <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-indigo-500 to-violet-600 bg-clip-text text-transparent">
