@@ -68,15 +68,38 @@ HF_MODELS: list[str] = (
     [m.strip() for m in _hf_models_env.split(",") if m.strip()]
     if _hf_models_env
     else [
+        # --- DeepSeek-R1 Series (State-of-the-Art Reasoning & Problem Solving) ---
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+        "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+
+        # --- Qwen 2.5 Flagships (Leading General, Math & Coding Intelligence) ---
+        "Qwen/Qwen2.5-72B-Instruct",
+        "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "Qwen/Qwen2.5-14B-Instruct",
+        "Qwen/Qwen2.5-7B-Instruct",
+
+        # --- Meta Llama 3 Series (Flagship 70B & 8B Performance) ---
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+
+        # --- Mistral AI Series (European Flagship Reasoning & Dense MoE) ---
+        "mistralai/Mistral-Small-24B-Instruct-2501",
+        "mistralai/Mistral-7B-Instruct-v0.3",
         "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "meta-llama/Meta-Llama-3-8B-Instruct",
+
+        # --- Google Gemma 2 (High Academic & Technical Accuracy) ---
+        "google/gemma-2-27b-it",
+        "google/gemma-2-9b-it",
+
+        # --- Microsoft Phi Series (Compact High Reasoning) ---
+        "microsoft/phi-4",
+        "microsoft/Phi-3.5-mini-instruct",
+
+        # --- Hugging Face Aligned Foundation ---
         "HuggingFaceH4/zephyr-7b-beta",
-        "google/flan-t5-xxl",
-        "tiiuae/falcon-7b-instruct",
-        "microsoft/phi-2",
-        "bigscience/bloom-7b1",
-        "EleutherAI/gpt-neo-2.7B",
-        "openai-community/gpt2",
     ]
 )
 
@@ -496,6 +519,9 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
         body_lower = body.lower()
         logger.warning("HF model %s returned HTTP %d: %s", model_id, exc.code, body[:300])
 
+        if exc.code in (401, 403):
+            if any(k in body_lower for k in ("gated", "access", "permission", "agreement", "terms", "unauthorized")):
+                raise _HFError("unavailable", f"{model_id} requires license approval on Hugging Face: {body[:150]}") from exc
         if exc.code == 429:
             raise _HFError("rate_limit", f"HTTP 429 from {model_id}") from exc
         if exc.code == 503:
@@ -515,8 +541,10 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
     except (urllib.error.URLError, TimeoutError) as exc:
         raise _HFError("unavailable", f"Network error calling {model_id}: {exc}") from exc
 
-    # Parse response — HF returns list[{generated_text}] for text-generation
-    # or dict for text2text-generation
+    # Parse response — handles standard text-generation ([{"generated_text": ...}]),
+    # OpenAI-compatible router format ({"choices": [{"message": {"content": ...}}]}),
+    # and text2text-generation payloads.
+    text = ""
     if isinstance(result, list) and result:
         first = result[0]
         if isinstance(first, dict):
@@ -524,7 +552,19 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
         else:
             text = str(first)
     elif isinstance(result, dict):
-        text = result.get("generated_text") or result.get("translation_text") or ""
+        # Support OpenAI-compatible router format
+        choices = result.get("choices")
+        if isinstance(choices, list) and choices:
+            c0 = choices[0]
+            if isinstance(c0, dict):
+                msg = c0.get("message")
+                if isinstance(msg, dict):
+                    text = msg.get("content") or ""
+                else:
+                    text = c0.get("text") or ""
+        if not text:
+            text = result.get("generated_text") or result.get("translation_text") or ""
+
         # Check for API-level error payload
         if not text and "error" in result:
             err_msg = str(result["error"]).lower()
@@ -541,6 +581,15 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
             raise _HFError("unavailable", result["error"])
     else:
         text = str(result)
+
+    # Format DeepSeek-R1 style <think> tags for clean markdown rendering
+    if "<think>" in text and "</think>" in text:
+        text = re.sub(
+            r"<think>\s*(.*?)\s*</think>",
+            r"> 🧠 **Reasoning:**\n> \1\n\n",
+            text,
+            flags=re.DOTALL,
+        )
 
     text = text.strip()
     if not text:
