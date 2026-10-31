@@ -54,6 +54,41 @@ EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 # Generation model
 GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-2.5-flash").strip()
 GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
+# --------------------------------------------------------------------------- #
+# HuggingFace Inference API Configuration (fallback chain)
+# --------------------------------------------------------------------------- #
+HF_API_TOKEN = (os.getenv("HF_API_TOKEN") or "").strip()
+HF_API_OK = bool(HF_API_TOKEN) and not HF_API_TOKEN.startswith("your_")
+
+# Ordered list of HuggingFace fallback models — tried in sequence when
+# the primary Gemini model fails with a token/context/quota error.
+# Override at runtime via the HF_MODELS env var (comma-separated model IDs).
+_hf_models_env = (os.getenv("HF_MODELS") or "").strip()
+HF_MODELS: list[str] = (
+    [m.strip() for m in _hf_models_env.split(",") if m.strip()]
+    if _hf_models_env
+    else [
+        "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "meta-llama/Meta-Llama-3-8B-Instruct",
+        "HuggingFaceH4/zephyr-7b-beta",
+        "google/flan-t5-xxl",
+        "tiiuae/falcon-7b-instruct",
+        "microsoft/phi-2",
+        "bigscience/bloom-7b1",
+        "EleutherAI/gpt-neo-2.7B",
+        "openai-community/gpt2",
+    ]
+)
+
+HF_API_BASE = "https://api-inference.huggingface.co/models"
+HF_MAX_NEW_TOKENS = int((os.getenv("HF_MAX_NEW_TOKENS") or "2048").strip())
+HF_TIMEOUT = int((os.getenv("HF_TIMEOUT") or "60").strip())
+
+if HF_API_OK:
+    logger.info("HuggingFace fallback chain configured with %d models.", len(HF_MODELS))
+else:
+    logger.info("HF_API_TOKEN not set — HuggingFace fallback chain disabled.")
+
 
 # Generation config: high token limit + low temperature for grounded, precise, high-accuracy answers
 _generation_config = genai.types.GenerationConfig(
@@ -406,6 +441,203 @@ RETRYABLE = (
 )
 
 
+
+
+# --------------------------------------------------------------------------- #
+# HuggingFace Inference Helpers
+# --------------------------------------------------------------------------- #
+
+class _HFError(Exception):
+    """Raised internally to signal a specific HuggingFace API failure mode."""
+    def __init__(self, reason: str, message: str = ""):
+        self.reason = reason   # "token_limit" | "rate_limit" | "loading" | "unavailable"
+        self.message = message
+        super().__init__(f"HF error [{reason}]: {message}")
+
+
+def call_huggingface_model(prompt: str, model_id: str) -> str:
+    """POST to the HuggingFace Inference API and return the generated text.
+
+    Raises _HFError with reason codes:
+      - "token_limit"  : prompt/context too long for this model
+      - "rate_limit"   : API 429 / quota exhausted
+      - "loading"      : model is currently loading (cold-start)
+      - "unavailable"  : any other failure
+    """
+    url = f"{HF_API_BASE}/{model_id}"
+    payload = json.dumps({
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": HF_MAX_NEW_TOKENS,
+            "temperature": GENERATION_TEMPERATURE,
+            "return_full_text": False,
+            "do_sample": True,
+        },
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {HF_API_TOKEN}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
+            raw = resp.read()
+            result = json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        body_lower = body.lower()
+        logger.warning("HF model %s returned HTTP %d: %s", model_id, exc.code, body[:300])
+
+        if exc.code == 429:
+            raise _HFError("rate_limit", f"HTTP 429 from {model_id}") from exc
+        if exc.code == 503:
+            if "loading" in body_lower or "currently loading" in body_lower:
+                raise _HFError("loading", f"{model_id} is loading") from exc
+            raise _HFError("unavailable", f"HTTP 503 from {model_id}") from exc
+        if exc.code == 413:
+            raise _HFError("token_limit", f"Payload too large for {model_id}") from exc
+        # Check body for context-length indicators
+        token_signals = [
+            "input is too long", "maximum context length", "max_new_tokens",
+            "exceeds the model", "too many tokens", "input length",
+        ]
+        if any(sig in body_lower for sig in token_signals):
+            raise _HFError("token_limit", f"Token limit exceeded on {model_id}") from exc
+        raise _HFError("unavailable", f"HTTP {exc.code} from {model_id}: {body[:200]}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise _HFError("unavailable", f"Network error calling {model_id}: {exc}") from exc
+
+    # Parse response — HF returns list[{generated_text}] for text-generation
+    # or dict for text2text-generation
+    if isinstance(result, list) and result:
+        first = result[0]
+        if isinstance(first, dict):
+            text = first.get("generated_text") or first.get("translation_text") or ""
+        else:
+            text = str(first)
+    elif isinstance(result, dict):
+        text = result.get("generated_text") or result.get("translation_text") or ""
+        # Check for API-level error payload
+        if not text and "error" in result:
+            err_msg = str(result["error"]).lower()
+            token_signals = [
+                "input is too long", "maximum context length", "max_new_tokens",
+                "exceeds the model", "too many tokens",
+            ]
+            if any(sig in err_msg for sig in token_signals):
+                raise _HFError("token_limit", result["error"])
+            if "loading" in err_msg or "currently loading" in err_msg:
+                raise _HFError("loading", result["error"])
+            if "rate limit" in err_msg or "quota" in err_msg:
+                raise _HFError("rate_limit", result["error"])
+            raise _HFError("unavailable", result["error"])
+    else:
+        text = str(result)
+
+    text = text.strip()
+    if not text:
+        raise _HFError("unavailable", f"{model_id} returned empty response")
+    return text
+
+
+def generate_with_fallback(
+    prompt: str,
+    gemini_history: list[dict],
+) -> str:
+    """Generate an answer using Gemini first, then rotate through HF models on failure.
+
+    Strategy:
+      1. Try Gemini (primary). On token/context/quota error → fall through to HF chain.
+      2. For each HF model in HF_MODELS:
+         a. "token_limit" → skip to next model immediately.
+         b. "loading"     → wait 15 s, retry once, then skip.
+         c. "rate_limit"  → skip to next model immediately.
+         d. "unavailable" → skip to next model.
+         e. success       → return answer.
+      3. If all models exhausted → raise HTTPException 503.
+    """
+    # ── Primary: Gemini ──────────────────────────────────────────────────────
+    gemini_context_errors = (
+        "context window", "context length", "token limit",
+        "too many tokens", "input too long",
+    )
+    try:
+        chat_session = generation_model.start_chat(history=gemini_history)
+        response = call_gemini(chat_session.send_message, prompt)
+        return response.text
+    except ValueError as exc:
+        # Blocked / empty — propagate directly (not a token-limit issue)
+        raise HTTPException(
+            502,
+            "The model returned no answer (blocked or empty). Try rephrasing your question.",
+        ) from exc
+    except Exception as exc:
+        exc_str = str(exc).lower()
+        is_context_error = any(sig in exc_str for sig in gemini_context_errors)
+        is_quota_error = isinstance(exc, gexc.ResourceExhausted)
+        if not (is_context_error or is_quota_error):
+            # Not a token/quota error — propagate as structured HTTP error
+            raise to_http_error(exc, "Generation") from exc
+        logger.warning(
+            "Gemini generation failed (%s) — rotating to HuggingFace fallback chain. Error: %s",
+            "quota" if is_quota_error else "context-length",
+            exc,
+        )
+
+    # ── Fallback: HuggingFace model rotation ─────────────────────────────────
+    if not HF_API_OK:
+        raise HTTPException(
+            503,
+            "Gemini generation failed and HF_API_TOKEN is not configured. "
+            "Set HF_API_TOKEN in your environment to enable the HuggingFace fallback chain.",
+        )
+
+    for model_id in HF_MODELS:
+        logger.info("Trying HuggingFace model: %s", model_id)
+        try:
+            answer = call_huggingface_model(prompt, model_id)
+            logger.info("HuggingFace model %s succeeded.", model_id)
+            return answer
+        except _HFError as hf_err:
+            if hf_err.reason == "token_limit":
+                logger.warning("Model %s: token limit exceeded — trying next model.", model_id)
+                continue
+            if hf_err.reason == "rate_limit":
+                logger.warning("Model %s: rate limit hit — trying next model.", model_id)
+                continue
+            if hf_err.reason == "loading":
+                logger.info("Model %s: still loading — waiting 15 s then retrying once.", model_id)
+                time.sleep(15)
+                try:
+                    answer = call_huggingface_model(prompt, model_id)
+                    logger.info("HuggingFace model %s succeeded after warm-up.", model_id)
+                    return answer
+                except _HFError as retry_err:
+                    logger.warning(
+                        "Model %s: retry failed (%s) — trying next model.", model_id, retry_err.reason
+                    )
+                    continue
+            # "unavailable" or anything else
+            logger.warning("Model %s: unavailable (%s) — trying next model.", model_id, hf_err.message)
+            continue
+        except Exception as exc:
+            logger.warning("Model %s: unexpected error — trying next model. %s", model_id, exc)
+            continue
+
+    raise HTTPException(
+        503,
+        "All generation models (Gemini + HuggingFace fallback chain) are currently unavailable. "
+        "Please try again later.",
+    )
+
 def call_gemini(fn, *args, **kwargs):
     """Call a Gemini SDK function with exponential backoff on retryable errors."""
     delay = 1.0
@@ -577,6 +809,8 @@ def health():
     return {
         "status": "ok",
         "gemini_configured": API_KEY_OK,
+        "hf_configured": HF_API_OK,
+        "hf_models_count": len(HF_MODELS),
     }
 
 
@@ -853,12 +1087,9 @@ def chat(request: ChatRequest):
         gemini_history.append({"role": role, "parts": [msg.content[:16000]]})
 
     try:
-        chat_session = generation_model.start_chat(history=gemini_history)
-        response = call_gemini(chat_session.send_message, prompt)
-        answer = response.text
-    except ValueError as exc:
-        logger.warning("Response blocked or empty: %s", exc)
-        raise HTTPException(502, "The model returned no answer (blocked or empty). Try rephrasing your question.") from exc
+        answer = generate_with_fallback(prompt, gemini_history)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Generation failed")
         raise to_http_error(exc, "Generation") from exc

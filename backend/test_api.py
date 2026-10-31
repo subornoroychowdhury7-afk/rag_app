@@ -1,6 +1,6 @@
 import unittest
 from fastapi.testclient import TestClient
-from main import app, sanitize_filename, NO_ANSWER, compute_keyword_score, chunk_text, MAX_QUERY_CHARS
+from main import app, sanitize_filename, NO_ANSWER, compute_keyword_score, chunk_text, MAX_QUERY_CHARS, HF_API_OK, HF_MODELS
 
 
 class ApiEndpointsTestCase(unittest.TestCase):
@@ -83,6 +83,22 @@ class ApiEndpointsTestCase(unittest.TestCase):
         })
         self.assertNotEqual(res.status_code, 400)
 
+
+
+    def test_health_includes_hf_config(self):
+        res = self.client.get("/health")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("hf_configured", data)
+        self.assertIn("hf_models_count", data)
+        self.assertIsInstance(data["hf_configured"], bool)
+        self.assertEqual(data["hf_models_count"], len(HF_MODELS))
+
+    def test_hf_models_list_not_empty(self):
+        self.assertGreater(len(HF_MODELS), 0)
+        for m in HF_MODELS:
+            self.assertIsInstance(m, str)
+            self.assertGreater(len(m), 0)
 
 if __name__ == "__main__":
     unittest.main()
