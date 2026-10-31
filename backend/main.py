@@ -614,6 +614,60 @@ def _call_hf_legacy(prompt: str, model_id: str) -> str:
     return text.strip()
 
 
+def call_groq_model(prompt: str, model_id: str) -> str:
+    """Query free open-weights models (DeepSeek-R1, Qwen2.5, Llama 3.3) via Groq Cloud.
+
+    Groq's context limit is ~8192 tokens. We cap the prompt at 24000 chars (~6000 tokens) to
+    leave headroom for the 4096 max_tokens completion window.
+    """
+    # Truncate prompt to fit Groq's context window
+    MAX_GROQ_CHARS = 24000
+    if len(prompt) > MAX_GROQ_CHARS:
+        if "USER QUESTION:" in prompt:
+            parts = prompt.split("USER QUESTION:")
+            ctx = parts[0]
+            q_part = "USER QUESTION:" + parts[1]
+            allowed = max(1000, MAX_GROQ_CHARS - len(q_part) - 200)
+            prompt = ctx[:allowed] + "\n\n[...context truncated for model window...]\n\n" + q_part
+        else:
+            prompt = prompt[:MAX_GROQ_CHARS]
+
+    payload = json.dumps({
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": GENERATION_TEMPERATURE,
+        "max_tokens": 4096,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        GROQ_ROUTER_BASE,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "User-Agent": "DocQnA/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=35) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            choices = result.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                msg = choices[0].get("message") or {}
+                content = msg.get("content") or ""
+                if content.strip():
+                    return _format_model_response(content.strip())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("Groq HTTP %d for %s: %s", exc.code, model_id, body[:200])
+        raise RuntimeError(f"Groq HTTP {exc.code}: {body[:150]}") from exc
+    except Exception as exc:
+        logger.warning("Groq network error for %s: %s", model_id, exc)
+        raise
+
+    raise RuntimeError(f"Empty response from Groq model {model_id}")
+
+
 def call_huggingface_model(prompt: str, model_id: str) -> str:
     """POST to Hugging Face via the modern Router first, with automatic fallback to native serverless endpoint."""
     trimmed_prompt = prepare_prompt_for_hf(prompt, max_chars=8000)
@@ -653,7 +707,23 @@ def _format_model_response(text: str) -> str:
 
 
 def call_groq_model(prompt: str, model_id: str) -> str:
-    """Query free open-weights models (DeepSeek-R1, Qwen2.5, Llama 3.3) via Groq Cloud."""
+    """Query free open-weights models (DeepSeek-R1, Qwen2.5, Llama 3.3) via Groq Cloud.
+
+    Groq's context limit is ~8192 tokens. We cap the prompt at 24000 chars (~6000 tokens) to
+    leave headroom for the 4096 max_tokens completion window.
+    """
+    # Truncate prompt to fit Groq's context window
+    MAX_GROQ_CHARS = 24000
+    if len(prompt) > MAX_GROQ_CHARS:
+        if "USER QUESTION:" in prompt:
+            parts = prompt.split("USER QUESTION:")
+            ctx = parts[0]
+            q_part = "USER QUESTION:" + parts[1]
+            allowed = max(1000, MAX_GROQ_CHARS - len(q_part) - 200)
+            prompt = ctx[:allowed] + "\n\n[...context truncated for model window...]\n\n" + q_part
+        else:
+            prompt = prompt[:MAX_GROQ_CHARS]
+
     payload = json.dumps({
         "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
@@ -670,14 +740,23 @@ def call_groq_model(prompt: str, model_id: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=35) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        choices = result.get("choices") or []
-        if choices and isinstance(choices[0], dict):
-            msg = choices[0].get("message") or {}
-            content = msg.get("content") or ""
-            if content.strip():
-                return _format_model_response(content.strip())
+    try:
+        with urllib.request.urlopen(req, timeout=35) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            choices = result.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                msg = choices[0].get("message") or {}
+                content = msg.get("content") or ""
+                if content.strip():
+                    return _format_model_response(content.strip())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("Groq HTTP %d for %s: %s", exc.code, model_id, body[:200])
+        raise RuntimeError(f"Groq HTTP {exc.code}: {body[:150]}") from exc
+    except Exception as exc:
+        logger.warning("Groq network error for %s: %s", model_id, exc)
+        raise
+
     raise RuntimeError(f"Empty response from Groq model {model_id}")
 
 
@@ -1074,6 +1153,30 @@ def debug_hf(model: str = "Qwen/Qwen2.5-7B-Instruct"):
         "router_error": router_err,
         "legacy_result": legacy_res,
         "legacy_error": legacy_err,
+    }
+
+
+@app.get("/debug-groq")
+def debug_groq(model: str = "deepseek-r1-distill-llama-70b"):
+    """Diagnostic endpoint to test Groq Cloud API live."""
+    if not GROQ_API_OK:
+        return {"error": "GROQ_API_KEY not configured", "groq_configured": False}
+    started = time.perf_counter()
+    test_prompt = "What is 2 + 2? Reply in one word."
+    result = None
+    error = None
+    try:
+        result = call_groq_model(test_prompt, model)
+    except Exception as e:
+        error = str(e)
+    elapsed = round(time.perf_counter() - started, 2)
+    return {
+        "model": model,
+        "elapsed_seconds": elapsed,
+        "groq_configured": GROQ_API_OK,
+        "groq_key_prefix": GROQ_API_KEY[:8] + "..." if GROQ_API_KEY else "none",
+        "result": result,
+        "error": error,
     }
 
 
