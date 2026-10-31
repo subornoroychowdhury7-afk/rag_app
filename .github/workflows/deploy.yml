@@ -141,10 +141,11 @@ jobs:
         run: |
           # VERCEL_ORG_ID and VERCEL_PROJECT_ID are read automatically by the CLI
           # replacing the gitignored .vercel/project.json
+          # Deploy from the frontend subdirectory so Vercel builds the correct project root
           npx --yes vercel deploy --prod \
             --token "$VERCEL_TOKEN" \
             --yes \
-            --no-wait
+            --cwd ./frontend
 
       - name: Notice if Vercel token not set
         if: ${{ env.VERCEL_TOKEN == '' }}
