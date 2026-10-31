@@ -40,7 +40,7 @@ Query  → embed query → cosine similarity search → distance filter → Gemi
 - Chunk size: **1,800 characters**
 - Chunk overlap: **300 characters**
 - Embedding model: `models/gemini-embedding-2` (768 dimensions)
-- Generation model: `gemini-3.5-flash`
+- Generation model: `gemini-3.8-flash`
 - Cosine distance cutoff: **0.75** (chunks with distance > 0.75 are discarded; lower distance = higher similarity)
 - Top-K retrieval: 10 chunks per query
 
@@ -54,7 +54,7 @@ If no chunk passes the distance cutoff, the API returns a fixed fallback message
 |---|---|---|
 | Backend API | FastAPI (Python 3.12) | REST endpoints, request validation, CORS |
 | Vector store | ChromaDB | Persistent local store (HNSW/cosine) or Chroma Cloud |
-| Embeddings & generation | Google Gemini (`google-generativeai`) | `gemini-embedding-2` for vectors, `gemini-3.5-flash` for answers and summaries |
+| Embeddings & generation | Google Gemini (`google-generativeai`) | `gemini-embedding-2` for vectors, `gemini-3.8-flash` for answers and summaries |
 | PDF processing | PyMuPDF, pytesseract, Pillow | Text extraction and per-page OCR |
 | Frontend | Next.js 16 + React 19 + TypeScript | App Router SPA |
 | Styling | Tailwind CSS v4 | Utility-first styling |
@@ -114,7 +114,7 @@ Open `http://localhost:3000`.
 | `GEMINI_API_KEY` | — | **Required.** Embeddings, generation, and OCR fallback |
 | `EMBEDDING_MODEL` | `models/gemini-embedding-2` | |
 | `EMBEDDING_DIM` | `768` | |
-| `GENERATION_MODEL` | `gemini-3.5-flash` | |
+| `GENERATION_MODEL` | `gemini-3.8-flash` | |
 | `CHUNK_SIZE` | `1800` | Characters per chunk |
 | `CHUNK_OVERLAP` | `300` | Overlap between adjacent chunks |
 | `MAX_DISTANCE` | `0.75` | Cosine distance cutoff (0 = identical) |
