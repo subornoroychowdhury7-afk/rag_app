@@ -9,6 +9,5 @@ pytesseract
 pillow
 python-dotenv
 httpx
-httpx2
 pytest
 pytest-anyio

@@ -8,14 +8,10 @@ POST /chat                       : question -> embedding -> top-K chunks -> Gemi
 GET  /health                     : service health status
 """
 
-import base64
-import json
 import logging
 import os
 import re
 import time
-import urllib.error
-import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -839,7 +835,6 @@ def chat(request: ChatRequest):
         "source_files": source_files,
         "citations": citations,
         "suggested_followups": suggested_followups,
-        "model_used": model_used,
     }
 
 
@@ -902,5 +897,4 @@ Document Content:
         "filename": clean_name,
         "summary": summary_md,
         "total_chunks": len(docs),
-        "model_used": model_used,
     }

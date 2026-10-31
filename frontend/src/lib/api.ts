@@ -24,14 +24,12 @@ export interface ChatResult {
   source_files?: string[];
   citations?: Citation[];
   suggested_followups?: string[];
-  model_used?: string;
 }
 
 export interface DocumentSummaryResult {
   filename: string;
   summary: string;
   total_chunks: number;
-  model_used?: string;
 }
 
 export interface DeleteResult {
@@ -106,8 +104,6 @@ export function uploadFile(file: File): Promise<UploadResult> {
   form.append("file", file);
   return request<UploadResult>("/upload", { method: "POST", body: form });
 }
-
-export const uploadPdf = uploadFile;
 
 export function sendChat(
   query: string,

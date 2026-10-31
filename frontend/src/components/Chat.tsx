@@ -11,7 +11,6 @@ interface Message {
   sources?: string[];
   citations?: Citation[];
   suggestedFollowups?: string[];
-  modelUsed?: string;
   isError?: boolean;
   timestamp: Date;
 }
@@ -378,7 +377,6 @@ export default function Chat({
           sources: res.sources,
           citations: res.citations,
           suggestedFollowups: res.suggested_followups,
-          modelUsed: res.model_used,
           timestamp: new Date(),
         },
       ]);
