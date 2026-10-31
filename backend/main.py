@@ -597,95 +597,168 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
     return text
 
 
+
+def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[str]:
+    """Dynamically prioritize frontier Hugging Face models tailored to the user's workflow.
+
+    Workflow heuristics:
+      - Mathematics / Scientific / Equations / Formal Logic:
+        -> DeepSeek-R1 Series (Distill-Qwen-32B, Distill-Llama-8B, Distill-Qwen-14B)
+      - Coding / Technical / Algorithms / DevOps / SQL / Syntax:
+        -> Qwen2.5-Coder-32B-Instruct, Microsoft phi-4, Qwen2.5-72B
+      - Step-by-Step Procedural Guides (mode == "step_by_step"):
+        -> Qwen2.5-Coder-32B-Instruct, Mistral-Small-24B-Instruct-2501, Qwen2.5-72B
+      - Academic & Scholarly Research (mode == "academic"):
+        -> DeepSeek-R1-Distill-Qwen-32B, Qwen2.5-72B-Instruct, Google Gemma-2-27b-it
+      - Executive & Crisp Takeaways (mode == "concise"):
+        -> Mistral-Small-24B-Instruct-2501, Gemma-2-9b-it, Meta-Llama-3.1-8B-Instruct
+      - Comprehensive Synthesis & Deep Analysis (mode == "detailed", default):
+        -> DeepSeek-R1-Distill-Qwen-32B, Qwen2.5-72B-Instruct, Meta-Llama-3.3-70B-Instruct
+    """
+    q_lower = query.lower()
+    m_lower = (mode or "detailed").lower()
+
+    math_indicators = {
+        "formula", "equation", "calculate", "theorem", "math", "proof", "solve",
+        "derivative", "integral", "probability", "statistics", "matrix", "algebra",
+        "calculus", "latex", "variance", "deviation", "complexity", "ratio",
+    }
+    code_indicators = {
+        "code", "python", "function", "api", "algorithm", "class", "sql", "typescript",
+        "javascript", "debug", "error", "terminal", "script", "json", "endpoint",
+        "react", "docker", "pipeline", "syntax", "git", "database", "method", "loop",
+    }
+
+    words = set(re.findall(r"\b\w+\b", q_lower))
+    is_math = bool(words & math_indicators)
+    is_code = bool(words & code_indicators)
+
+    preferred: list[str] = []
+
+    if is_code or m_lower == "step_by_step":
+        preferred = [
+            "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "microsoft/phi-4",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "mistralai/Mistral-Small-24B-Instruct-2501",
+        ]
+    elif is_math or m_lower == "academic":
+        preferred = [
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "google/gemma-2-27b-it",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        ]
+    elif m_lower == "concise":
+        preferred = [
+            "mistralai/Mistral-Small-24B-Instruct-2501",
+            "google/gemma-2-9b-it",
+            "meta-llama/Meta-Llama-3.1-8B-Instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+            "Qwen/Qwen2.5-7B-Instruct",
+        ]
+    else:  # detailed (default)
+        preferred = [
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+            "mistralai/Mistral-Small-24B-Instruct-2501",
+            "google/gemma-2-27b-it",
+        ]
+
+    # Preserve order of preferred models first, followed by the rest of HF_MODELS
+    seen = set()
+    result = []
+    for model in preferred:
+        if model in HF_MODELS and model not in seen:
+            seen.add(model)
+            result.append(model)
+
+    for model in HF_MODELS:
+        if model not in seen:
+            seen.add(model)
+            result.append(model)
+
+    return result
+
+
 def generate_with_fallback(
     prompt: str,
     gemini_history: list[dict],
-) -> str:
-    """Generate an answer using Gemini first, then rotate through HF models on failure.
+    query: str = "",
+    mode: str = "detailed",
+) -> tuple[str, str]:
+    """Generate an answer using workflow-tailored frontier Hugging Face models as primary,
+    rotating through subsequent models on token/rate limits, with Gemini as safety backup.
 
-    Strategy:
-      1. Try Gemini (primary). On token/context/quota error → fall through to HF chain.
-      2. For each HF model in HF_MODELS:
-         a. "token_limit" → skip to next model immediately.
-         b. "loading"     → wait 15 s, retry once, then skip.
-         c. "rate_limit"  → skip to next model immediately.
-         d. "unavailable" → skip to next model.
-         e. success       → return answer.
-      3. If all models exhausted → raise HTTPException 503.
+    Returns:
+        tuple[str, str]: (generated_answer, model_name_used)
     """
-    # ── Primary: Gemini ──────────────────────────────────────────────────────
-    gemini_context_errors = (
-        "context window", "context length", "token limit",
-        "too many tokens", "input too long",
-    )
+    # ── 1. Primary: Hugging Face Frontier Models Tailored to Workflow ─────────
+    if HF_API_OK:
+        model_candidates = select_models_for_workflow(query=query, mode=mode)
+        logger.info(
+            "Primary workflow engine selected: %s (workflow mode: %s, candidates: %d)",
+            model_candidates[0] if model_candidates else "none",
+            mode,
+            len(model_candidates),
+        )
+
+        for model_id in model_candidates:
+            logger.info("Calling primary workflow model: %s", model_id)
+            try:
+                answer = call_huggingface_model(prompt, model_id)
+                logger.info("Successfully generated answer using %s", model_id)
+                return answer, model_id
+            except _HFError as hf_err:
+                if hf_err.reason == "token_limit":
+                    logger.warning("Model %s: token limit exceeded — rotating to next model in workflow chain.", model_id)
+                    continue
+                if hf_err.reason == "rate_limit":
+                    logger.warning("Model %s: rate limit hit (429) — rotating to next model in workflow chain.", model_id)
+                    continue
+                if hf_err.reason == "loading":
+                    logger.info("Model %s is cold-starting — waiting 10s then retrying once.", model_id)
+                    time.sleep(10)
+                    try:
+                        answer = call_huggingface_model(prompt, model_id)
+                        logger.info("Model %s succeeded after warm-up.", model_id)
+                        return answer, model_id
+                    except _HFError as retry_err:
+                        logger.warning("Model %s warm-up retry failed (%s) — rotating to next model.", model_id, retry_err.reason)
+                        continue
+                logger.warning("Model %s unavailable (%s) — rotating to next model.", model_id, hf_err.message)
+                continue
+            except Exception as exc:
+                logger.warning("Model %s unexpected error (%s) — rotating to next model.", model_id, exc)
+                continue
+
+        logger.warning("All Hugging Face models exhausted or rate-limited. Falling back to Gemini safety net.")
+
+    # ── 2. Fallback: Gemini Safety Net ───────────────────────────────────────
+    if not API_KEY_OK:
+        raise HTTPException(
+            503,
+            "Hugging Face models failed or are unconfigured, and GEMINI_API_KEY is not set.",
+        )
+
     try:
         chat_session = generation_model.start_chat(history=gemini_history)
         response = call_gemini(chat_session.send_message, prompt)
-        return response.text
+        return response.text, GENERATION_MODEL
     except ValueError as exc:
-        # Blocked / empty — propagate directly (not a token-limit issue)
         raise HTTPException(
             502,
             "The model returned no answer (blocked or empty). Try rephrasing your question.",
         ) from exc
     except Exception as exc:
-        exc_str = str(exc).lower()
-        is_context_error = any(sig in exc_str for sig in gemini_context_errors)
-        is_quota_error = isinstance(exc, gexc.ResourceExhausted)
-        if not (is_context_error or is_quota_error):
-            # Not a token/quota error — propagate as structured HTTP error
-            raise to_http_error(exc, "Generation") from exc
-        logger.warning(
-            "Gemini generation failed (%s) — rotating to HuggingFace fallback chain. Error: %s",
-            "quota" if is_quota_error else "context-length",
-            exc,
-        )
+        logger.exception("Gemini safety net generation failed")
+        raise to_http_error(exc, "Generation") from exc
 
-    # ── Fallback: HuggingFace model rotation ─────────────────────────────────
-    if not HF_API_OK:
-        raise HTTPException(
-            503,
-            "Gemini generation failed and HF_API_TOKEN is not configured. "
-            "Set HF_API_TOKEN in your environment to enable the HuggingFace fallback chain.",
-        )
-
-    for model_id in HF_MODELS:
-        logger.info("Trying HuggingFace model: %s", model_id)
-        try:
-            answer = call_huggingface_model(prompt, model_id)
-            logger.info("HuggingFace model %s succeeded.", model_id)
-            return answer
-        except _HFError as hf_err:
-            if hf_err.reason == "token_limit":
-                logger.warning("Model %s: token limit exceeded — trying next model.", model_id)
-                continue
-            if hf_err.reason == "rate_limit":
-                logger.warning("Model %s: rate limit hit — trying next model.", model_id)
-                continue
-            if hf_err.reason == "loading":
-                logger.info("Model %s: still loading — waiting 15 s then retrying once.", model_id)
-                time.sleep(15)
-                try:
-                    answer = call_huggingface_model(prompt, model_id)
-                    logger.info("HuggingFace model %s succeeded after warm-up.", model_id)
-                    return answer
-                except _HFError as retry_err:
-                    logger.warning(
-                        "Model %s: retry failed (%s) — trying next model.", model_id, retry_err.reason
-                    )
-                    continue
-            # "unavailable" or anything else
-            logger.warning("Model %s: unavailable (%s) — trying next model.", model_id, hf_err.message)
-            continue
-        except Exception as exc:
-            logger.warning("Model %s: unexpected error — trying next model. %s", model_id, exc)
-            continue
-
-    raise HTTPException(
-        503,
-        "All generation models (Gemini + HuggingFace fallback chain) are currently unavailable. "
-        "Please try again later.",
-    )
 
 def call_gemini(fn, *args, **kwargs):
     """Call a Gemini SDK function with exponential backoff on retryable errors."""
@@ -1089,6 +1162,7 @@ def chat(request: ChatRequest):
                     "source_files": [d["name"] for d in doc_items],
                     "citations": [],
                     "suggested_followups": sample_followups,
+                    "model_used": "system",
                 }
             else:
                 return {
@@ -1100,6 +1174,7 @@ def chat(request: ChatRequest):
                     "source_files": [],
                     "citations": [],
                     "suggested_followups": [],
+                    "model_used": "system",
                 }
 
         return {
@@ -1136,7 +1211,7 @@ def chat(request: ChatRequest):
         gemini_history.append({"role": role, "parts": [msg.content[:16000]]})
 
     try:
-        answer = generate_with_fallback(prompt, gemini_history)
+        answer, model_used = generate_with_fallback(prompt, gemini_history, query=query, mode=mode_key)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1159,6 +1234,7 @@ def chat(request: ChatRequest):
         "source_files": source_files,
         "citations": citations,
         "suggested_followups": suggested_followups,
+        "model_used": model_used,
     }
 
 
@@ -1205,8 +1281,14 @@ Document Content:
 """
 
     try:
-        response = call_gemini(generation_model.generate_content, summary_prompt)
-        summary_md = response.text
+        summary_md, model_used = generate_with_fallback(
+            summary_prompt,
+            gemini_history=[],
+            query=clean_name,
+            mode="detailed",
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Summarization failed for %s", clean_name)
         raise to_http_error(exc, "Summarization") from exc
@@ -1215,4 +1297,5 @@ Document Content:
         "filename": clean_name,
         "summary": summary_md,
         "total_chunks": len(docs),
+        "model_used": model_used,
     }

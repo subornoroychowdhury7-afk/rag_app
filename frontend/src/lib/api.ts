@@ -23,12 +23,14 @@ export interface ChatResult {
   source_files?: string[];
   citations?: Citation[];
   suggested_followups?: string[];
+  model_used?: string;
 }
 
 export interface DocumentSummaryResult {
   filename: string;
   summary: string;
   total_chunks: number;
+  model_used?: string;
 }
 
 export interface DeleteResult {
