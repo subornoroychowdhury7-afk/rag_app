@@ -51,81 +51,9 @@ genai.configure(api_key=GEMINI_API_KEY)
 EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").strip()
 EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
-# Generation model
-GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.5-flash-lite").strip()
+# Primary Generation model: Gemini 3.8 Flash Lite
+GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.8-flash-lite").strip()
 GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
-# --------------------------------------------------------------------------- #
-# HuggingFace Inference API Configuration (fallback chain)
-# --------------------------------------------------------------------------- #
-HF_API_TOKEN = (
-    os.getenv("HF_API_TOKEN")
-    or os.getenv("HF_API TOKEN")
-    or os.getenv("HF_TOKEN")
-    or os.getenv("HUGGINGFACE_API_KEY")
-    or os.getenv("HUGGINGFACE_TOKEN")
-    or os.getenv("HUGGING_FACE_HUB_TOKEN")
-    or ""
-).strip()
-HF_API_OK = bool(HF_API_TOKEN) and not HF_API_TOKEN.startswith("your_")
-
-# Ordered list of HuggingFace fallback models — tried in sequence when
-# the primary Gemini model fails with a token/context/quota error.
-# Override at runtime via the HF_MODELS env var (comma-separated model IDs).
-_hf_models_env = (os.getenv("HF_MODELS") or "").strip()
-HF_MODELS: list[str] = (
-    [m.strip() for m in _hf_models_env.split(",") if m.strip()]
-    if _hf_models_env
-    else [
-        # --- DeepSeek-R1 Series (State-of-the-Art Reasoning & Problem Solving) ---
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-        "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-
-        # --- Qwen 2.5 Flagships (Leading General, Math & Coding Intelligence) ---
-        "Qwen/Qwen2.5-72B-Instruct",
-        "Qwen/Qwen2.5-Coder-32B-Instruct",
-        "Qwen/Qwen2.5-14B-Instruct",
-        "Qwen/Qwen2.5-7B-Instruct",
-
-        # --- Meta Llama 3 Series (Flagship 70B & 8B Performance) ---
-        "meta-llama/Llama-3.3-70B-Instruct",
-        "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        "meta-llama/Meta-Llama-3.1-8B-Instruct",
-
-        # --- Mistral AI Series (European Flagship Reasoning & Dense MoE) ---
-        "mistralai/Mistral-Small-24B-Instruct-2501",
-        "mistralai/Mistral-7B-Instruct-v0.3",
-        "mistralai/Mixtral-8x7B-Instruct-v0.1",
-
-        # --- Google Gemma 2 (High Academic & Technical Accuracy) ---
-        "google/gemma-2-27b-it",
-        "google/gemma-2-9b-it",
-
-        # --- Microsoft Phi Series (Compact High Reasoning) ---
-        "microsoft/phi-4",
-        "microsoft/Phi-3.5-mini-instruct",
-
-        # --- Hugging Face Aligned Foundation ---
-        "HuggingFaceH4/zephyr-7b-beta",
-    ]
-)
-
-HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
-HF_ROUTER_BASE = "https://router.huggingface.co/v1/chat/completions"
-HF_MAX_NEW_TOKENS = int((os.getenv("HF_MAX_NEW_TOKENS") or "2048").strip())
-HF_TIMEOUT = int((os.getenv("HF_TIMEOUT") or "40").strip())
-
-# Optional Groq API configuration (Free frontier open-weights: DeepSeek-R1, Qwen2.5, Llama 3.3)
-GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
-GROQ_API_OK = bool(GROQ_API_KEY) and not GROQ_API_KEY.startswith("your_")
-GROQ_ROUTER_BASE = "https://api.groq.com/openai/v1/chat/completions"
-
-if HF_API_OK:
-    logger.info("HuggingFace fallback chain configured with %d models.", len(HF_MODELS))
-else:
-    logger.info("HF_API_TOKEN not set — HuggingFace fallback chain disabled.")
-
 
 # Generation config: high token limit + low temperature for grounded, precise, high-accuracy answers
 _generation_config = genai.types.GenerationConfig(
@@ -133,13 +61,6 @@ _generation_config = genai.types.GenerationConfig(
     temperature=GENERATION_TEMPERATURE,
     top_p=0.95,
 )
-try:
-    generation_model = genai.GenerativeModel(
-        GENERATION_MODEL,
-        generation_config=_generation_config,
-    )
-except Exception:
-    generation_model = genai.GenerativeModel(GENERATION_MODEL)
 
 CHUNK_SIZE = int((os.getenv("CHUNK_SIZE") or "1800").strip())
 CHUNK_OVERLAP = int((os.getenv("CHUNK_OVERLAP") or "300").strip())
@@ -253,91 +174,55 @@ else:
 try:
     collection = chroma_client.get_or_create_collection(name="rag_collection", configuration=index_config)
 except Exception:
-    logger.warning("Could not apply cosine index config; falling back to ChromaDB defaults.", exc_info=True)
     collection = chroma_client.get_or_create_collection(name="rag_collection")
-
-# --------------------------------------------------------------------------- #
-# FastAPI Application & Middleware
-# --------------------------------------------------------------------------- #
-app = FastAPI(title="DocQ&A API", version="1.0.0")
-
-raw_origins = os.getenv("ALLOWED_ORIGINS", "*").strip()
-if raw_origins == "*":
-    origins = ["*"]
-else:
-    origins = [o.strip().rstrip("/") for o in raw_origins.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=False if origins == ["*"] else True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(_request: Request, exc: RequestValidationError):
-    errors = [f"{err.get('loc', ['body'])[-1]}: {err.get('msg', 'invalid value')}" for err in exc.errors()]
-    detail = "; ".join(errors) if errors else "Invalid request payload."
-    return JSONResponse(status_code=400, content={"detail": detail})
-
-
-@app.exception_handler(Exception)
-async def global_exception_handler(_request: Request, exc: Exception):
-    if isinstance(exc, HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-    logger.exception("Unhandled server exception: %s", exc)
-    return JSONResponse(status_code=500, content={"detail": "An internal server error occurred."})
-
-
-# --------------------------------------------------------------------------- #
-# Request Models & Input Validation
-# --------------------------------------------------------------------------- #
-class Message(BaseModel):
-    role: str = Field(..., max_length=20)
-    content: str = Field(..., max_length=65536)
-
-
-class ChatRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=MAX_QUERY_CHARS)
-    history: list[Message] = Field(default_factory=list)
-    doc_filter: Optional[str] = None
-    mode: Optional[str] = Field(default="detailed", max_length=30)
-
-
-def sanitize_filename(raw_name: str) -> str:
-    """Sanitize filename to prevent path traversal and invalid characters."""
-    clean = os.path.basename(raw_name.strip())
-    clean = "".join(ch for ch in clean if ch.isprintable() and ch not in ('\0', '\r', '\n'))
-    clean = clean.strip()
-    if not clean or clean in (".", ".."):
-        raise HTTPException(400, "Invalid file name.")
-    return clean
 
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list[str]:
-    """Split text into semantically coherent overlapping windows."""
-    if chunk_size <= 0:
-        raise ValueError("chunk_size must be a positive integer")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError("overlap must be >= 0 and smaller than chunk_size")
+def sanitize_filename(filename: str) -> str:
+    """Strip path traversal components and normalise filename."""
+    base = os.path.basename(filename)
+    return re.sub(r"[^\w\.\-\s]", "_", base).strip()
 
-    text = text.strip()
-    if not text:
+
+def extract_pdf_text(contents: bytes) -> str:
+    """Extract text from PDF bytes; falls back to OCR if fewer than 50 chars extracted."""
+    doc = fitz.open(stream=contents, filetype="pdf")
+    pages = []
+    for page in doc:
+        pages.append(page.get_text() or "")
+    text = "\n".join(pages).strip()
+
+    if len(text) < 50:
+        logger.info("Direct text extraction yielded %d chars - falling back to OCR", len(text))
+        ocr_pages = []
+        for page in doc:
+            pix = page.get_pixmap()
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                ocr_text = pytesseract.image_to_string(img)
+                ocr_pages.append(ocr_text)
+            except Exception as exc:
+                logger.warning("OCR failed on a page: %s", exc)
+        ocr_combined = "\n".join(ocr_pages).strip()
+        if ocr_combined:
+            text = ocr_combined
+
+    doc.close()
+    return text
+
+
+def chunk_text(text: str, chunk_size: int = 1800, overlap: int = 300) -> list[str]:
+    """Semantic recursive chunking that respects paragraph, sentence, and phrase boundaries."""
+    if not text or not text.strip():
         return []
-    if len(text) <= chunk_size:
-        return [text]
 
-    separators = ["\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " ", ""]
+    separators = ["\n\n", "\n", ". ", "; ", ", ", " "]
 
     def _split(txt: str, sep_idx: int) -> list[str]:
-        if len(txt) <= chunk_size:
-            return [txt]
         if sep_idx >= len(separators):
             step = chunk_size - overlap
             return [txt[i:i + chunk_size] for i in range(0, len(txt), step)]
@@ -432,7 +317,7 @@ def compute_keyword_score(query: str, text: str) -> float:
     return min(1.0, matched_weight / max(total_weight, 1.0))
 
 
-def contextualize_query(query: str, history: list[Message]) -> str:
+def contextualize_query(query: str, history: list) -> str:
     """Rewrite follow-up questions to be self-contained for accurate vector retrieval."""
     if not history or not API_KEY_OK:
         return query
@@ -459,26 +344,14 @@ def contextualize_query(query: str, history: list[Message]) -> str:
         f"Latest Question: {query}\n"
         "Standalone Search Query:"
     )
-    # Use fast Hugging Face model for query contextualization
-    if HF_API_OK:
-        for fast_m in ["Qwen/Qwen2.5-7B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "HuggingFaceH4/zephyr-7b-beta"]:
-            try:
-                rewritten = call_huggingface_model(prompt, fast_m).strip().strip('"\'')
-                if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
-                    logger.info("Contextualized query via HF (%s): '%s' -> '%s'", fast_m, query, rewritten)
-                    return rewritten
-            except Exception:
-                continue
 
-    # Fallback to Gemini if HF is not configured
-    if API_KEY_OK:
-        try:
-            res_text, _ = generate_with_gemini(prompt, [])
-            rewritten = res_text.strip().strip('"\'')
-            if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
-                return rewritten
-        except Exception as e:
-            logger.debug("Gemini query rewriting skipped: %s", e)
+    try:
+        res_text, _ = generate_with_gemini(prompt, [])
+        rewritten = res_text.strip().strip('"\'')
+        if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
+            return rewritten
+    except Exception as e:
+        logger.debug("Gemini query rewriting skipped: %s", e)
 
     return query
 
@@ -489,471 +362,6 @@ RETRYABLE = (
     gexc.DeadlineExceeded,
     gexc.InternalServerError,
 )
-
-
-
-
-# --------------------------------------------------------------------------- #
-# HuggingFace Inference Helpers
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# HuggingFace & Multi-Model Inference Helpers
-# --------------------------------------------------------------------------- #
-
-class _HFError(Exception):
-    """Raised internally to signal a specific HuggingFace API failure mode."""
-    def __init__(self, reason: str, message: str = ""):
-        self.reason = reason   # "token_limit" | "rate_limit" | "loading" | "unavailable"
-        self.message = message
-        super().__init__(f"HF error [{reason}]: {message}")
-
-
-def prepare_prompt_for_hf(prompt: str, max_chars: int = 9000) -> str:
-    """Ensure prompt fits within Hugging Face free serverless context window limits."""
-    if len(prompt) <= max_chars:
-        return prompt
-    if "USER QUESTION:" in prompt:
-        parts = prompt.split("USER QUESTION:")
-        context_part = parts[0]
-        question_part = "USER QUESTION:" + parts[1]
-        allowed_context = max(1000, max_chars - len(question_part) - 200)
-        return context_part[:allowed_context] + "\n\n[...context summarized for model context window...]\n\n" + question_part
-    return prompt[:max_chars]
-
-
-def _call_hf_router(prompt: str, model_id: str) -> str:
-    """Query Hugging Face's modern Inference Providers Router (OpenAI chat completions format)."""
-    clean_id = model_id.split(":")[0]
-    payload = json.dumps({
-        "model": clean_id,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": min(HF_MAX_NEW_TOKENS, 1500),
-        "temperature": GENERATION_TEMPERATURE,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        HF_ROUTER_BASE,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {HF_API_TOKEN}",
-            "User-Agent": "DocQnA/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
-            result = json.loads(resp.read())
-            choices = result.get("choices") or []
-            if choices and isinstance(choices[0], dict):
-                msg = choices[0].get("message") or {}
-                content = msg.get("content") or choices[0].get("text") or ""
-                if content.strip():
-                    return content.strip()
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        logger.warning("HF router error for %s: HTTP %d: %s", clean_id, exc.code, body[:250])
-        raise _HFError("unavailable", f"Router HTTP {exc.code}: {body[:150]}") from exc
-    except Exception as exc:
-        raise _HFError("unavailable", f"Router network error: {exc}") from exc
-
-    raise _HFError("unavailable", f"Empty content from HF router for {clean_id}")
-
-
-def _call_hf_legacy(prompt: str, model_id: str) -> str:
-    """Query Hugging Face's native serverless models endpoint."""
-    clean_model_id = model_id.split(":")[0]
-    url = f"{HF_API_BASE}/{clean_model_id}"
-    payload = json.dumps({
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": min(HF_MAX_NEW_TOKENS, 1024),
-            "return_full_text": False,
-        },
-        "options": {
-            "wait_for_model": True,
-            "use_cache": True,
-        },
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {HF_API_TOKEN}",
-            "User-Agent": "DocQnA/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
-            result = json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        logger.warning("HF serverless error for %s: HTTP %d: %s", clean_model_id, exc.code, body[:250])
-        raise _HFError("unavailable", f"Serverless HTTP {exc.code}: {body[:150]}") from exc
-    except Exception as exc:
-        raise _HFError("unavailable", f"Serverless network error: {exc}") from exc
-
-    text = ""
-    if isinstance(result, list) and result:
-        first = result[0]
-        if isinstance(first, dict):
-            text = first.get("generated_text") or first.get("translation_text") or ""
-        else:
-            text = str(first)
-    elif isinstance(result, dict):
-        text = result.get("generated_text") or result.get("translation_text") or ""
-        if not text and "error" in result:
-            raise _HFError("unavailable", str(result["error"]))
-    else:
-        text = str(result)
-    return text.strip()
-
-
-def call_groq_model(prompt: str, model_id: str) -> str:
-    """Query free open-weights models (DeepSeek-R1, Qwen2.5, Llama 3.3) via Groq Cloud.
-
-    Groq's context limit is ~8192 tokens. We cap the prompt at 24000 chars (~6000 tokens) to
-    leave headroom for the 4096 max_tokens completion window.
-    """
-    # Truncate prompt to fit Groq's context window
-    MAX_GROQ_CHARS = 24000
-    if len(prompt) > MAX_GROQ_CHARS:
-        if "USER QUESTION:" in prompt:
-            parts = prompt.split("USER QUESTION:")
-            ctx = parts[0]
-            q_part = "USER QUESTION:" + parts[1]
-            allowed = max(1000, MAX_GROQ_CHARS - len(q_part) - 200)
-            prompt = ctx[:allowed] + "\n\n[...context truncated for model window...]\n\n" + q_part
-        else:
-            prompt = prompt[:MAX_GROQ_CHARS]
-
-    payload = json.dumps({
-        "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": GENERATION_TEMPERATURE,
-        "max_tokens": 4096,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        GROQ_ROUTER_BASE,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "DocQnA/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            choices = result.get("choices") or []
-            if choices and isinstance(choices[0], dict):
-                msg = choices[0].get("message") or {}
-                content = msg.get("content") or ""
-                if content.strip():
-                    return _format_model_response(content.strip())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        logger.warning("Groq HTTP %d for %s: %s", exc.code, model_id, body[:200])
-        raise RuntimeError(f"Groq HTTP {exc.code}: {body[:150]}") from exc
-    except Exception as exc:
-        logger.warning("Groq network error for %s: %s", model_id, exc)
-        raise
-
-    raise RuntimeError(f"Empty response from Groq model {model_id}")
-
-
-def call_huggingface_model(prompt: str, model_id: str) -> str:
-    """POST to Hugging Face via the modern Router first, with automatic fallback to native serverless endpoint."""
-    trimmed_prompt = prepare_prompt_for_hf(prompt, max_chars=8000)
-
-    # 1. Try modern Inference Providers Router (best for DeepSeek-R1, Qwen2.5-72B)
-    try:
-        raw_text = _call_hf_router(trimmed_prompt, model_id)
-        if raw_text and len(raw_text.strip()) > 0:
-            return _format_model_response(raw_text)
-    except Exception as router_err:
-        logger.info("HF router call for %s failed (%s) — trying native serverless endpoint.", model_id, router_err)
-
-    # 2. Fallback: native serverless endpoint
-    try:
-        raw_text = _call_hf_legacy(trimmed_prompt, model_id)
-        if raw_text and len(raw_text.strip()) > 0:
-            return _format_model_response(raw_text)
-    except _HFError:
-        raise
-    except Exception as exc:
-        raise _HFError("unavailable", f"Calling {model_id} failed: {exc}") from exc
-
-    raise _HFError("unavailable", f"Empty response from {model_id}")
-
-
-def _format_model_response(text: str) -> str:
-    """Format model output (clean DeepSeek-R1 <think> tags into styled markdown)."""
-    text = text.strip()
-    if "<think>" in text and "</think>" in text:
-        text = re.sub(
-            r"<think>\s*(.*?)\s*</think>",
-            r"> 🧠 **Reasoning:**\n> \1\n\n",
-            text,
-            flags=re.DOTALL,
-        )
-    return text.strip()
-
-
-def call_groq_model(prompt: str, model_id: str) -> str:
-    """Query free open-weights models (DeepSeek-R1, Qwen2.5, Llama 3.3) via Groq Cloud.
-
-    Groq's context limit is ~8192 tokens. We cap the prompt at 24000 chars (~6000 tokens) to
-    leave headroom for the 4096 max_tokens completion window.
-    """
-    # Truncate prompt to fit Groq's context window
-    MAX_GROQ_CHARS = 24000
-    if len(prompt) > MAX_GROQ_CHARS:
-        if "USER QUESTION:" in prompt:
-            parts = prompt.split("USER QUESTION:")
-            ctx = parts[0]
-            q_part = "USER QUESTION:" + parts[1]
-            allowed = max(1000, MAX_GROQ_CHARS - len(q_part) - 200)
-            prompt = ctx[:allowed] + "\n\n[...context truncated for model window...]\n\n" + q_part
-        else:
-            prompt = prompt[:MAX_GROQ_CHARS]
-
-    payload = json.dumps({
-        "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": GENERATION_TEMPERATURE,
-        "max_tokens": 4096,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        GROQ_ROUTER_BASE,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "User-Agent": "DocQnA/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            choices = result.get("choices") or []
-            if choices and isinstance(choices[0], dict):
-                msg = choices[0].get("message") or {}
-                content = msg.get("content") or ""
-                if content.strip():
-                    return _format_model_response(content.strip())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        logger.warning("Groq HTTP %d for %s: %s", exc.code, model_id, body[:200])
-        raise RuntimeError(f"Groq HTTP {exc.code}: {body[:150]}") from exc
-    except Exception as exc:
-        logger.warning("Groq network error for %s: %s", model_id, exc)
-        raise
-
-    raise RuntimeError(f"Empty response from Groq model {model_id}")
-
-
-def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[str]:
-    """Dynamically prioritize frontier Hugging Face models tailored to the user's workflow.
-
-    Includes both elite 32B/70B reasoning models and instant free-tier 7B/8B models so that
-    it succeeds immediately whether the user has Inference Provider credits or free serverless.
-    """
-    q_lower = query.lower()
-    m_lower = (mode or "detailed").lower()
-
-    math_indicators = {
-        "formula", "equation", "calculate", "theorem", "math", "proof", "solve",
-        "derivative", "integral", "probability", "statistics", "matrix", "algebra",
-        "calculus", "latex", "variance", "deviation", "complexity", "ratio",
-    }
-    code_indicators = {
-        "code", "python", "function", "api", "algorithm", "class", "sql", "typescript",
-        "javascript", "debug", "error", "terminal", "script", "json", "endpoint",
-        "react", "docker", "pipeline", "syntax", "git", "database", "method", "loop",
-    }
-
-    words = set(re.findall(r"\b\w+\b", q_lower))
-    is_math = bool(words & math_indicators)
-    is_code = bool(words & code_indicators)
-
-    preferred: list[str] = []
-
-    if is_code or m_lower == "step_by_step":
-        preferred = [
-            "Qwen/Qwen2.5-Coder-32B-Instruct",
-            "Qwen/Qwen2.5-7B-Instruct",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-            "microsoft/Phi-3.5-mini-instruct",
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-            "microsoft/phi-4",
-            "Qwen/Qwen2.5-72B-Instruct",
-        ]
-    elif is_math or m_lower == "academic":
-        preferred = [
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-            "Qwen/Qwen2.5-7B-Instruct",
-            "Qwen/Qwen2.5-72B-Instruct",
-            "google/gemma-2-9b-it",
-            "google/gemma-2-27b-it",
-        ]
-    elif m_lower == "concise":
-        preferred = [
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            "google/gemma-2-9b-it",
-            "Qwen/Qwen2.5-7B-Instruct",
-            "meta-llama/Meta-Llama-3.1-8B-Instruct",
-            "mistralai/Mistral-Small-24B-Instruct-2501",
-            "HuggingFaceH4/zephyr-7b-beta",
-        ]
-    else:  # detailed (default)
-        preferred = [
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-            "Qwen/Qwen2.5-7B-Instruct",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            "Qwen/Qwen2.5-72B-Instruct",
-            "google/gemma-2-9b-it",
-            "HuggingFaceH4/zephyr-7b-beta",
-            "meta-llama/Meta-Llama-3.1-8B-Instruct",
-        ]
-
-    seen = set()
-    result = []
-    for model in preferred:
-        if model in HF_MODELS and model not in seen:
-            seen.add(model)
-            result.append(model)
-
-    for model in HF_MODELS:
-        if model not in seen:
-            seen.add(model)
-            result.append(model)
-
-    return result
-
-
-def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, str]:
-    """Call Google Gemini with automatic fallback across known valid Gemini 3 and 2 models."""
-    configured_model = GENERATION_MODEL.strip()
-
-    # If the user or environment has a deprecated model name like gemini-2.5-pro, normalize it
-    if "2.5-pro" in configured_model or not configured_model:
-        configured_model = "gemini-3.5-flash-lite"
-
-    # Try Gemini 3 generation models first as requested, followed by stable fallbacks
-    candidates = [
-        configured_model,
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
-    ]
-    seen = set()
-    models_to_try = []
-    for m in candidates:
-        if m and m not in seen:
-            seen.add(m)
-            models_to_try.append(m)
-
-    last_exc = None
-    for m_name in models_to_try:
-        try:
-            logger.info("Calling Gemini model: %s", m_name)
-            gm = genai.GenerativeModel(m_name, generation_config=_generation_config)
-            chat_session = gm.start_chat(history=gemini_history)
-            response = call_gemini(chat_session.send_message, prompt)
-            return response.text, m_name
-        except Exception as exc:
-            logger.warning("Gemini model '%s' failed (%s) — trying next model in chain...", m_name, exc)
-            last_exc = exc
-            continue
-
-    if last_exc:
-        raise to_http_error(last_exc, "Generation") from last_exc
-    raise HTTPException(502, "All Gemini generation models failed.")
-
-
-def generate_with_fallback(
-    prompt: str,
-    gemini_history: list[dict],
-    query: str = "",
-    mode: str = "detailed",
-) -> tuple[str, str, Optional[str]]:
-    """Generate an answer using workflow-tailored frontier Hugging Face models as primary,
-    rotating instantly through warm models on token/rate limits, with Gemini as safety backup.
-
-    Returns:
-        tuple[str, str, Optional[str]]: (generated_answer, model_name_used, fallback_reason)
-    """
-    fallback_reason = None
-    last_hf_error = None
-
-    # ── 1. Primary: Hugging Face Frontier Models Tailored to Workflow ─────────
-    if HF_API_OK:
-        model_candidates = select_models_for_workflow(query=query, mode=mode)
-        for model_id in model_candidates[:8]:
-            try:
-                answer = call_huggingface_model(prompt, model_id)
-                logger.info("Successfully generated answer using %s", model_id)
-                return answer, model_id, None
-            except _HFError as hf_err:
-                logger.warning("HF model %s failed (%s) — rotating to next candidate.", model_id, hf_err.reason)
-                last_hf_error = hf_err.message
-                continue
-            except Exception as exc:
-                logger.warning("HF model %s unexpected error (%s) — rotating to next candidate.", model_id, exc)
-                last_hf_error = str(exc)
-                continue
-
-        if last_hf_error and ("402" in last_hf_error or "no remaining credits" in last_hf_error.lower()):
-            fallback_reason = "Hugging Face credits exhausted (HTTP 402: You have no remaining credits)."
-        elif last_hf_error:
-            fallback_reason = f"Hugging Face models unavailable ({last_hf_error[:70]})."
-        else:
-            fallback_reason = "Hugging Face models unavailable."
-
-        logger.warning("%s Engaging backup provider.", fallback_reason)
-    else:
-        fallback_reason = "HF_API_TOKEN not configured."
-
-    # ── 1.5. Secondary Open-Weights: Groq Cloud (Free DeepSeek-R1 / Qwen / Llama) ──
-    if GROQ_API_OK:
-        groq_candidates = [
-            "deepseek-r1-distill-llama-70b",
-            "qwen-2.5-32b",
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-        ]
-        for g_model in groq_candidates:
-            try:
-                ans = call_groq_model(prompt, g_model)
-                logger.info("Successfully generated answer using Groq %s", g_model)
-                return ans, f"groq/{g_model}", fallback_reason
-            except Exception as g_err:
-                logger.warning("Groq model %s failed (%s) — trying next candidate...", g_model, g_err)
-                continue
-
-    # ── 2. Fallback: Gemini Safety Net with Auto-Model Fallback ──────────────
-    if not API_KEY_OK:
-        raise HTTPException(
-            503,
-            "Primary models unavailable, and GEMINI_API_KEY is not configured.",
-        )
-
-    ans, gemini_model = generate_with_gemini(prompt, gemini_history)
-    return ans, gemini_model, fallback_reason
 
 
 def call_gemini(fn, *args, **kwargs):
@@ -991,6 +399,51 @@ def require_api_key() -> None:
         raise HTTPException(500, "GEMINI_API_KEY is not configured on the server.")
 
 
+def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, str]:
+    """Call Google Gemini with automatic fallback across known Gemini flash lite and flash models.
+
+    Primary: gemini-3.8-flash-lite. If Google returns 404/Not Found for the model name,
+    it automatically falls back to other known Gemini flash models.
+    """
+    configured_model = GENERATION_MODEL.strip()
+    if not configured_model:
+        configured_model = "gemini-3.8-flash-lite"
+
+    candidates = [
+        configured_model,
+        "gemini-3.8-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+    ]
+    seen = set()
+    models_to_try = []
+    for m in candidates:
+        if m and m not in seen:
+            seen.add(m)
+            models_to_try.append(m)
+
+    last_exc = None
+    for m_name in models_to_try:
+        try:
+            logger.info("Calling Gemini model: %s", m_name)
+            gm = genai.GenerativeModel(m_name, generation_config=_generation_config)
+            chat_session = gm.start_chat(history=gemini_history)
+            response = call_gemini(chat_session.send_message, prompt)
+            return response.text, m_name
+        except Exception as exc:
+            if isinstance(exc, gexc.NotFound) or "404" in str(exc) or "not found" in str(exc).lower():
+                logger.warning("Gemini model '%s' not found (%s) — trying next candidate...", m_name, exc)
+                last_exc = exc
+                continue
+            raise
+
+    if last_exc:
+        raise to_http_error(last_exc, "Generation") from last_exc
+    raise HTTPException(502, "All Gemini generation models failed.")
+
+
 def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
     result = call_gemini(
         genai.embed_content,
@@ -1003,9 +456,11 @@ def embed_text(text: str, task_type: str = "retrieval_document") -> list[float]:
 
 
 def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list[list[float]]:
-    batches = [texts[i:i + 100] for i in range(0, len(texts), 100)]
+    """Embed texts concurrently in batches of 20 with up to 5 worker threads."""
+    batch_size = 20
+    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
 
-    def embed_batch(batch: list[str]) -> list[list[float]]:
+    def _embed_batch(batch: list[str]) -> list[list[float]]:
         result = call_gemini(
             genai.embed_content,
             model=EMBEDDING_MODEL,
@@ -1013,171 +468,44 @@ def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list
             task_type=task_type,
             output_dimensionality=EMBEDDING_DIM,
         )
-        embeddings = result["embedding"]
-        if len(embeddings) != len(batch):
-            raise ValueError(f"Gemini returned {len(embeddings)} embeddings for {len(batch)} chunks.")
-        return embeddings
+        return result["embedding"]
 
-    if len(batches) == 1:
-        return embed_batch(batches[0])
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        return [embedding for batch_result in executor.map(embed_batch, batches)
-                for embedding in batch_result]
-
-
-def ocr_pdf_with_gemini(contents: bytes) -> str:
-    """Transcribe a scanned PDF through Gemini when local Tesseract is unavailable."""
-    require_api_key()
-    model = GENERATION_MODEL.removeprefix("models/")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": "Transcribe all visible text in this PDF as faithfully as possible. "
-                         "Preserve page order and paragraph breaks. Return only the transcription; "
-                         "do not summarize or add commentary."},
-                {"inlineData": {
-                    "mimeType": "application/pdf",
-                    "data": base64.b64encode(contents).decode("ascii"),
-                }},
-            ],
-        }],
-        "generationConfig": {"temperature": 0},
-    }
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        logger.exception("Gemini OCR request failed with HTTP %d", exc.code)
-        if exc.code == 429:
-            raise HTTPException(429, "The Gemini API rate limit or quota was reached during OCR.") from exc
-        if exc.code in (401, 403):
-            raise HTTPException(500, "The Gemini API key is missing, invalid, or not permitted for OCR.") from exc
-        raise HTTPException(503, "Gemini OCR is temporarily unavailable. Please try again shortly.") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        logger.exception("Gemini OCR request failed")
-        raise HTTPException(503, "Gemini OCR could not be reached. Please try again shortly.") from exc
-
-    text = "\n".join(
-        part["text"]
-        for candidate in result.get("candidates", [])
-        for part in candidate.get("content", {}).get("parts", [])
-        if isinstance(part.get("text"), str)
-    ).strip()
-    if not text:
-        raise HTTPException(422, "No text could be recognized in this PDF.")
-    return text
-
-
-def extract_pdf_text(contents: bytes) -> str:
-    """Extract embedded text and OCR pages containing no selectable text."""
-    from PIL import Image
-
-    text_pages: list[str] = []
-    document = None
-    try:
-        document = fitz.open(stream=contents, filetype="pdf")
-        if document.needs_pass:
-            raise HTTPException(400, "Encrypted PDFs are not supported.")
-        if len(document) == 0:
-            raise HTTPException(422, "The PDF file contains no pages.")
-        for page_number, page in enumerate(document, start=1):
-            page_text = page.get_text("text").strip()
-            if page_text:
-                clean_page = re.sub(r'(\w+)-\n(\w+)', r'\1\2', page_text)
-                text_pages.append(f"[Page {page_number}]\n{clean_page}")
-                continue
-
-            # Render at 200 DPI for optimal balance of OCR accuracy and performance
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72), alpha=False)
-            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-            page_text = pytesseract.image_to_string(image).strip()
-            if page_text:
-                clean_ocr = re.sub(r'(\w+)-\n(\w+)', r'\1\2', page_text)
-                text_pages.append(f"[Page {page_number}]\n{clean_ocr}")
-            logger.info("OCR page %d/%d: %d characters", page_number, len(document), len(page_text))
-    except HTTPException:
-        raise
-    except (fitz.FileDataError, fitz.EmptyFileError) as exc:
-        raise HTTPException(400, f"Could not read PDF: {exc}") from exc
-    except pytesseract.TesseractNotFoundError:
-        logger.warning("Tesseract is unavailable; falling back to Gemini PDF transcription")
-        return ocr_pdf_with_gemini(contents)
-    except Exception as exc:
-        logger.exception("PDF text extraction failed")
-        raise HTTPException(422, f"Could not extract text from PDF: {exc}") from exc
-    finally:
-        if document is not None:
-            document.close()
-    return "\n".join(text_pages)
+    all_embeddings: list[list[float]] = []
+    with ThreadPoolExecutor(max_workers=min(5, len(batches) or 1)) as executor:
+        for batch_embeddings in executor.map(_embed_batch, batches):
+            all_embeddings.extend(batch_embeddings)
+    return all_embeddings
 
 
 # --------------------------------------------------------------------------- #
-# Endpoints
+# FastAPI App & Endpoints
 # --------------------------------------------------------------------------- #
+app = FastAPI(title="DocQ&A Assistant RAG API")
 
-@app.get("/debug-hf")
-def debug_hf(model: str = "Qwen/Qwen2.5-7B-Instruct"):
-    """Diagnostic endpoint to inspect live Hugging Face API responses and latency."""
-    started = time.perf_counter()
-    router_err = None
-    legacy_err = None
-    prompt = "Hello! Please answer in 1 sentence: what is 2 + 2?"
-
-    router_res = None
-    try:
-        router_res = _call_hf_router(prompt, model)
-    except Exception as e:
-        router_err = f"{type(e).__name__}: {e}"
-
-    legacy_res = None
-    try:
-        legacy_res = _call_hf_legacy(prompt, model)
-    except Exception as e:
-        legacy_err = f"{type(e).__name__}: {e}"
-
-    elapsed = round(time.perf_counter() - started, 2)
-    return {
-        "model": model,
-        "elapsed_seconds": elapsed,
-        "hf_configured": HF_API_OK,
-        "hf_token_prefix": HF_API_TOKEN[:6] + "..." if HF_API_TOKEN else "none",
-        "router_result": router_res,
-        "router_error": router_err,
-        "legacy_result": legacy_res,
-        "legacy_error": legacy_err,
-    }
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in (os.getenv("ALLOWED_ORIGINS") or "*").split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.get("/debug-groq")
-def debug_groq(model: str = "deepseek-r1-distill-llama-70b"):
-    """Diagnostic endpoint to test Groq Cloud API live."""
-    if not GROQ_API_OK:
-        return {"error": "GROQ_API_KEY not configured", "groq_configured": False}
-    started = time.perf_counter()
-    test_prompt = "What is 2 + 2? Reply in one word."
-    result = None
-    error = None
-    try:
-        result = call_groq_model(test_prompt, model)
-    except Exception as e:
-        error = str(e)
-    elapsed = round(time.perf_counter() - started, 2)
-    return {
-        "model": model,
-        "elapsed_seconds": elapsed,
-        "groq_configured": GROQ_API_OK,
-        "groq_key_prefix": GROQ_API_KEY[:8] + "..." if GROQ_API_KEY else "none",
-        "result": result,
-        "error": error,
-    }
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    first_error = exc.errors()[0] if exc.errors() else {}
+    msg = first_error.get("msg", "Invalid request body.")
+    return JSONResponse(status_code=400, content={"detail": msg})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.get("/health")
@@ -1185,17 +513,12 @@ def health():
     return {
         "status": "ok",
         "gemini_configured": API_KEY_OK,
-        "hf_configured": HF_API_OK,
-        "hf_models_count": len(HF_MODELS),
-        "groq_configured": GROQ_API_OK,
+        "generation_model": GENERATION_MODEL,
     }
 
 
 @app.post("/upload")
 def upload(file: UploadFile = File(...)):
-    # Validate file format and content BEFORE checking API key so that
-    # bad-request errors are always returned as 400, even in environments
-    # where GEMINI_API_KEY is not configured.
     filename = sanitize_filename(file.filename or "")
     lower_name = filename.lower()
     valid_exts = (".pdf", ".txt", ".md", ".markdown")
@@ -1232,7 +555,6 @@ def upload(file: UploadFile = File(...)):
         raise to_http_error(exc, "Embedding") from exc
     embedded_at = time.perf_counter()
 
-    # Replace previous version if re-uploaded
     try:
         previous = collection.get(where={"source": filename}, include=[])["ids"]
         if previous:
@@ -1268,20 +590,34 @@ def get_documents():
             docs[source] = docs.get(source, 0) + 1
         return [{"name": name, "chunks": count} for name, count in sorted(docs.items())]
     except Exception as e:
-        logger.exception("Failed to fetch documents from ChromaDB: %s", e)
+        logger.warning("Failed to retrieve documents: %s", e)
         return []
 
 
 @app.delete("/documents/{filename:path}")
 def delete_document(filename: str):
-    """Remove a document's chunks from the vector store."""
+    """Delete all chunks belonging to a document from ChromaDB."""
     clean_name = sanitize_filename(filename)
     results = collection.get(where={"source": clean_name}, include=[])
-    if not results.get("ids"):
+    doc_ids = results.get("ids") or []
+    if not doc_ids:
         raise HTTPException(404, f"No document found with name '{clean_name}'.")
-    collection.delete(ids=results["ids"])
-    logger.info("Deleted %d chunks for %s", len(results["ids"]), clean_name)
-    return {"message": "Document deleted", "filename": clean_name, "chunks_deleted": len(results["ids"])}
+
+    collection.delete(ids=doc_ids)
+    logger.info("Deleted %d chunks for '%s'", len(doc_ids), clean_name)
+    return {"message": "Document deleted successfully", "filename": clean_name, "chunks_deleted": len(doc_ids)}
+
+
+class Message(BaseModel):
+    role: str
+    content: str = Field(..., max_length=32000)
+
+
+class ChatRequest(BaseModel):
+    query: str
+    history: list[Message] = Field(default_factory=list)
+    doc_filter: Optional[str] = None
+    mode: Optional[str] = "detailed"
 
 
 @app.post("/chat")
@@ -1293,7 +629,6 @@ def chat(request: ChatRequest):
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
 
-    # Determine filter: all documents or restricted to specific document
     where_filter = None
     if request.doc_filter and request.doc_filter.strip():
         filter_name = sanitize_filename(request.doc_filter)
@@ -1323,6 +658,7 @@ def chat(request: ChatRequest):
                 "source_files": [],
                 "citations": [],
                 "suggested_followups": [],
+                "model_used": "system",
             }
         return {
             "answer": NO_ANSWER,
@@ -1330,9 +666,9 @@ def chat(request: ChatRequest):
             "source_files": [],
             "citations": [],
             "suggested_followups": [],
+            "model_used": "system",
         }
 
-    # Contextualize follow-up questions using recent chat turns for accurate retrieval
     search_query = contextualize_query(query, request.history)
 
     try:
@@ -1341,7 +677,6 @@ def chat(request: ChatRequest):
         logger.exception("Query embedding failed")
         raise to_http_error(exc, "Embedding") from exc
 
-    # Retrieve candidate pool for hybrid vector + keyword re-ranking
     candidate_k = min(TOP_K * 2, total)
     query_kwargs = {
         "query_embeddings": [query_vector],
@@ -1363,13 +698,11 @@ def chat(request: ChatRequest):
         vec_sim = max(0.0, 1.0 - dist)
         kw_sim = compute_keyword_score(search_query, doc)
 
-        # Hybrid composite score combining dense semantic and exact lexical signals
         if kw_sim > 0:
             composite_score = 0.65 * vec_sim + 0.35 * kw_sim
         else:
             composite_score = 0.85 * vec_sim
 
-        # Dynamically widen cutoff for passages with strong keyword overlap
         effective_cutoff = MAX_DISTANCE + (0.08 if kw_sim > 0.3 else 0.0)
         if dist <= effective_cutoff:
             relevance = max(15, min(99, round(composite_score * 100)))
@@ -1382,7 +715,6 @@ def chat(request: ChatRequest):
                 "dist": dist,
             })
 
-    # Re-rank by composite score descending
     scored_candidates.sort(key=lambda x: x["composite_score"], reverse=True)
     citations = scored_candidates[:TOP_K]
 
@@ -1438,9 +770,9 @@ def chat(request: ChatRequest):
             "source_files": [],
             "citations": [],
             "suggested_followups": [],
+            "model_used": "system",
         }
 
-    # Format structured context blocks with source, section, and match metadata
     context_blocks = []
     for i, c in enumerate(citations, 1):
         context_blocks.append(
@@ -1458,7 +790,6 @@ def chat(request: ChatRequest):
         mode_instruction=mode_instruction,
     )
 
-    # Limit history to prevent excessive context blowup
     gemini_history = []
     recent_history = request.history[-MAX_HISTORY_ITEMS:]
     for msg in recent_history:
@@ -1466,7 +797,7 @@ def chat(request: ChatRequest):
         gemini_history.append({"role": role, "parts": [msg.content[:16000]]})
 
     try:
-        answer, model_used, fallback_reason = generate_with_fallback(prompt, gemini_history, query=query, mode=mode_key)
+        answer, model_used = generate_with_gemini(prompt, gemini_history)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1490,7 +821,6 @@ def chat(request: ChatRequest):
         "citations": citations,
         "suggested_followups": suggested_followups,
         "model_used": model_used,
-        "fallback_reason": fallback_reason,
     }
 
 
@@ -1537,12 +867,7 @@ Document Content:
 """
 
     try:
-        summary_md, model_used, _ = generate_with_fallback(
-            summary_prompt,
-            gemini_history=[],
-            query=clean_name,
-            mode="detailed",
-        )
+        summary_md, model_used = generate_with_gemini(summary_prompt, [])
     except HTTPException:
         raise
     except Exception as exc:
