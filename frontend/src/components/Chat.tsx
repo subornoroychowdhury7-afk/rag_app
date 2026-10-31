@@ -7,6 +7,7 @@ import MarkdownRenderer from "./MarkdownRenderer";
 interface Message {
   role: "user" | "assistant";
   content: string;
+  thinking?: string;
   sources?: string[];
   citations?: Citation[];
   suggestedFollowups?: string[];
@@ -330,7 +331,11 @@ export default function Chat({
       .map((m) => {
         const author = m.role === "user" ? "👤 User" : "🤖 DocQ&A Assistant";
         const time = formatTime(m.timestamp);
-        let out = `### ${author} (${time})\n\n${m.content}\n`;
+        let out = `### ${author} (${time})\n\n`;
+        if (m.thinking) {
+          out += `> 🧠 **Thinking Process & Verification:**\n> ${m.thinking.replace(/\n/g, "\n> ")}\n\n`;
+        }
+        out += `${m.content}\n`;
         if (m.citations && m.citations.length > 0) {
           out += `\n**Referenced Sources:**\n`;
           m.citations.forEach((c, idx) => {
@@ -369,6 +374,7 @@ export default function Chat({
         {
           role: "assistant",
           content: res.answer,
+          thinking: res.thinking,
           sources: res.sources,
           citations: res.citations,
           suggestedFollowups: res.suggested_followups,
@@ -505,6 +511,22 @@ export default function Chat({
                           : "border-slate-200/90 bg-white text-slate-800 shadow-xs dark:border-slate-700/80 dark:bg-slate-800 dark:text-slate-200"
                         }`}
                     >
+                      {m.thinking && (
+                        <details className="mb-3 group rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-2.5 text-xs transition-colors dark:border-indigo-900/50 dark:bg-indigo-950/30">
+                          <summary className="flex cursor-pointer select-none items-center gap-1.5 font-semibold text-indigo-700 hover:text-indigo-800 dark:text-indigo-300 dark:hover:text-indigo-200">
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-[11px] dark:bg-indigo-900/70">
+                              🧠
+                            </span>
+                            <span>Thinking Process & Verification</span>
+                            <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500 group-open:hidden">
+                              (Click to view reasoning)
+                            </span>
+                          </summary>
+                          <div className="mt-2.5 whitespace-pre-wrap border-t border-indigo-100 pt-2.5 font-mono text-[11px] leading-relaxed text-slate-600 dark:border-indigo-900/40 dark:text-slate-300">
+                            {m.thinking}
+                          </div>
+                        </details>
+                      )}
                       {m.isError ? m.content : <MarkdownRenderer content={m.content} />}
                     </div>
 

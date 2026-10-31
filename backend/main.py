@@ -104,8 +104,8 @@ MODE_INSTRUCTIONS = {
     ),
 }
 
-PROMPT_TEMPLATE = """You are DocQ&A Assistant, an elite academic and technical research AI. \
-Your objective is to deliver the most accurate, thorough, and insightful answer possible, \
+PROMPT_TEMPLATE = """You are DocQ&A Assistant, an elite frontier research AI powered by advanced deep thinking and rigorous analytical reasoning. \
+Your objective is to deliver the highest-intelligence, deeply grounded, mathematically and technically rigorous answer possible, \
 grounded STRICTLY in the provided context excerpts from the user's uploaded documents.
 
 CONTEXT EXCERPTS FROM UPLOADED DOCUMENTS:
@@ -114,6 +114,13 @@ CONTEXT EXCERPTS FROM UPLOADED DOCUMENTS:
 USER QUESTION: {query}
 
 {mode_instruction}
+
+DEEP REASONING & THINKING PROTOCOL:
+Before writing your final response, you MUST first execute an internal thinking and verification phase enclosed within <thinking>...</thinking> tags:
+1. DECONSTRUCT QUESTION: Identify explicit questions, implicit sub-problems, and key technical criteria.
+2. EVIDENCE AUDIT: Scan the provided context excerpts, extract exact figures, formulas, and facts, and cross-reference multiple passages.
+3. LOGICAL REASONING: Synthesize disparate data points, evaluate edge cases, and structure an authoritative, step-by-step or comparative analysis.
+4. GROUNDING & CITATION CHECK: Ensure every key factual statement is strictly backed by an excerpt, citing `[DocumentName.pdf]`.
 
 CORE ANSWER STANDARDS:
 1. EXECUTIVE CLARITY & DIRECTNESS:
@@ -804,6 +811,17 @@ def chat(request: ChatRequest):
         logger.exception("Generation failed")
         raise to_http_error(exc, "Generation") from exc
 
+    # Parse internal thinking / reasoning protocol if present
+    thinking = None
+    if "<thinking>" in answer and "</thinking>" in answer:
+        parts = answer.split("</thinking>")
+        thinking = parts[0].replace("<thinking>", "").strip()
+        answer = parts[1].strip()
+    elif "<think>" in answer and "</think>" in answer:
+        parts = answer.split("</think>")
+        thinking = parts[0].replace("<think>", "").strip()
+        answer = parts[1].strip()
+
     suggested_followups: list[str] = []
     if "FOLLOW_UPS:" in answer:
         parts = answer.split("FOLLOW_UPS:")
@@ -816,6 +834,7 @@ def chat(request: ChatRequest):
 
     return {
         "answer": answer,
+        "thinking": thinking,
         "sources": retrieved_chunks,
         "source_files": source_files,
         "citations": citations,
@@ -873,6 +892,11 @@ Document Content:
     except Exception as exc:
         logger.exception("Summarization failed for %s", clean_name)
         raise to_http_error(exc, "Summarization") from exc
+
+    if "</thinking>" in summary_md:
+        summary_md = summary_md.split("</thinking>")[-1].strip()
+    elif "</think>" in summary_md:
+        summary_md = summary_md.split("</think>")[-1].strip()
 
     return {
         "filename": clean_name,

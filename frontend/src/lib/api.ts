@@ -19,6 +19,7 @@ export interface Citation {
 
 export interface ChatResult {
   answer: string;
+  thinking?: string;
   sources: string[];
   source_files?: string[];
   citations?: Citation[];
