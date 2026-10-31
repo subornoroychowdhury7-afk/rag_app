@@ -111,7 +111,7 @@ HF_MODELS: list[str] = (
     ]
 )
 
-HF_API_BASE = "https://api-inference.huggingface.co/models"
+HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_ROUTER_BASE = "https://router.huggingface.co/v1/chat/completions"
 HF_MAX_NEW_TOKENS = int((os.getenv("HF_MAX_NEW_TOKENS") or "2048").strip())
 HF_TIMEOUT = int((os.getenv("HF_TIMEOUT") or "40").strip())
@@ -520,10 +520,9 @@ def prepare_prompt_for_hf(prompt: str, max_chars: int = 9000) -> str:
 
 def _call_hf_router(prompt: str, model_id: str) -> str:
     """Query Hugging Face's modern Inference Providers Router (OpenAI chat completions format)."""
-    # Use :fastest provider alias if not already specified for instant provider selection
-    router_model = model_id if ":" in model_id else f"{model_id}:fastest"
+    clean_id = model_id.split(":")[0]
     payload = json.dumps({
-        "model": router_model,
+        "model": clean_id,
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -540,19 +539,27 @@ def _call_hf_router(prompt: str, model_id: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
-        result = json.loads(resp.read())
-        choices = result.get("choices") or []
-        if choices and isinstance(choices[0], dict):
-            msg = choices[0].get("message") or {}
-            content = msg.get("content") or choices[0].get("text") or ""
-            if content.strip():
-                return content.strip()
-    raise _HFError("unavailable", f"Empty content from HF router for {router_model}")
+    try:
+        with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
+            result = json.loads(resp.read())
+            choices = result.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                msg = choices[0].get("message") or {}
+                content = msg.get("content") or choices[0].get("text") or ""
+                if content.strip():
+                    return content.strip()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("HF router error for %s: HTTP %d: %s", clean_id, exc.code, body[:250])
+        raise _HFError("unavailable", f"Router HTTP {exc.code}: {body[:150]}") from exc
+    except Exception as exc:
+        raise _HFError("unavailable", f"Router network error: {exc}") from exc
+
+    raise _HFError("unavailable", f"Empty content from HF router for {clean_id}")
 
 
 def _call_hf_legacy(prompt: str, model_id: str) -> str:
-    """Query Hugging Face's classic serverless models endpoint."""
+    """Query Hugging Face's native serverless models endpoint."""
     clean_model_id = model_id.split(":")[0]
     url = f"{HF_API_BASE}/{clean_model_id}"
     payload = json.dumps({
@@ -576,8 +583,15 @@ def _call_hf_legacy(prompt: str, model_id: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
-        result = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=HF_TIMEOUT) as resp:
+            result = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("HF serverless error for %s: HTTP %d: %s", clean_model_id, exc.code, body[:250])
+        raise _HFError("unavailable", f"Serverless HTTP {exc.code}: {body[:150]}") from exc
+    except Exception as exc:
+        raise _HFError("unavailable", f"Serverless network error: {exc}") from exc
 
     text = ""
     if isinstance(result, list) and result:
@@ -596,7 +610,7 @@ def _call_hf_legacy(prompt: str, model_id: str) -> str:
 
 
 def call_huggingface_model(prompt: str, model_id: str) -> str:
-    """POST to Hugging Face via the modern Router first, with automatic fallback to classic legacy endpoint."""
+    """POST to Hugging Face via the modern Router first, with automatic fallback to native serverless endpoint."""
     trimmed_prompt = prepare_prompt_for_hf(prompt, max_chars=8000)
 
     # 1. Try modern Inference Providers Router (best for DeepSeek-R1, Qwen2.5-72B)
@@ -605,29 +619,17 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
         if raw_text and len(raw_text.strip()) > 0:
             return _format_model_response(raw_text)
     except Exception as router_err:
-        logger.debug("HF router call for %s skipped (%s) — falling back to classic serverless.", model_id, router_err)
+        logger.info("HF router call for %s failed (%s) — trying native serverless endpoint.", model_id, router_err)
 
-    # 2. Fallback: classic serverless endpoint (runs free-tier 7B/8B models reliably)
+    # 2. Fallback: native serverless endpoint
     try:
         raw_text = _call_hf_legacy(trimmed_prompt, model_id)
         if raw_text and len(raw_text.strip()) > 0:
             return _format_model_response(raw_text)
-    except urllib.error.HTTPError as exc:
-        body = ""
-        try:
-            body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        b_lower = body.lower()
-        if exc.code == 429:
-            raise _HFError("rate_limit", f"HTTP 429 from {model_id}") from exc
-        if exc.code == 503:
-            raise _HFError("loading", f"{model_id} cold starting") from exc
-        if exc.code == 413 or "too many tokens" in b_lower:
-            raise _HFError("token_limit", f"Token limit on {model_id}") from exc
-        raise _HFError("unavailable", f"HTTP {exc.code} from {model_id}: {body[:100]}") from exc
+    except _HFError:
+        raise
     except Exception as exc:
-        raise _HFError("unavailable", f"Network error calling {model_id}: {exc}") from exc
+        raise _HFError("unavailable", f"Calling {model_id} failed: {exc}") from exc
 
     raise _HFError("unavailable", f"Empty response from {model_id}")
 
