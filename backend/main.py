@@ -57,7 +57,15 @@ GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").st
 # --------------------------------------------------------------------------- #
 # HuggingFace Inference API Configuration (fallback chain)
 # --------------------------------------------------------------------------- #
-HF_API_TOKEN = (os.getenv("HF_API_TOKEN") or "").strip()
+HF_API_TOKEN = (
+    os.getenv("HF_API_TOKEN")
+    or os.getenv("HF_API TOKEN")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_API_KEY")
+    or os.getenv("HUGGINGFACE_TOKEN")
+    or os.getenv("HUGGING_FACE_HUB_TOKEN")
+    or ""
+).strip()
 HF_API_OK = bool(HF_API_TOKEN) and not HF_API_TOKEN.startswith("your_")
 
 # Ordered list of HuggingFace fallback models — tried in sequence when
@@ -446,14 +454,27 @@ def contextualize_query(query: str, history: list[Message]) -> str:
         f"Latest Question: {query}\n"
         "Standalone Search Query:"
     )
-    try:
-        res = call_gemini(generation_model.generate_content, prompt)
-        rewritten = res.text.strip().strip('"\'')
-        if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
-            logger.info("Contextualized query: '%s' -> '%s'", query, rewritten)
-            return rewritten
-    except Exception as e:
-        logger.warning("Contextual query rewriting failed, using original query: %s", e)
+    # Use fast Hugging Face model for query contextualization
+    if HF_API_OK:
+        for fast_m in ["Qwen/Qwen2.5-7B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "HuggingFaceH4/zephyr-7b-beta"]:
+            try:
+                rewritten = call_huggingface_model(prompt, fast_m).strip().strip('"\'')
+                if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
+                    logger.info("Contextualized query via HF (%s): '%s' -> '%s'", fast_m, query, rewritten)
+                    return rewritten
+            except Exception:
+                continue
+
+    # Fallback to Gemini if HF is not configured
+    if API_KEY_OK:
+        try:
+            res_text, _ = generate_with_gemini(prompt, [])
+            rewritten = res_text.strip().strip('"\'')
+            if rewritten and len(rewritten) > 3 and not rewritten.lower().startswith("i cannot"):
+                return rewritten
+        except Exception as e:
+            logger.debug("Gemini query rewriting skipped: %s", e)
+
     return query
 
 
@@ -719,12 +740,17 @@ def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[
 def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, str]:
     """Call Google Gemini with automatic fallback across known active models."""
     configured_model = GENERATION_MODEL.strip()
+
+    # Normalize away known deprecated or preview model strings that cause 404
+    bad_prefixes = ("2.5-pro", "3.8", "3.5", "3.1")
+    if any(b in configured_model for b in bad_prefixes):
+        configured_model = "gemini-1.5-flash"
+
     candidates = [
         configured_model,
         "gemini-1.5-flash",
         "gemini-2.0-flash",
         "gemini-2.5-flash",
-        "gemini-1.5-pro",
     ]
     seen = set()
     models_to_try = []
@@ -747,7 +773,8 @@ def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, 
                 "not found", "no longer available", "deprecated", "not supported",
                 "invalid model", "does not exist", "unsupported", "is not available",
             )
-            if any(sig in exc_str for sig in model_error_signals):
+            # Catch 404, NotFound, or deprecation notices and seamlessly continue to the next model
+            if any(sig in exc_str for sig in model_error_signals) or isinstance(exc, gexc.NotFound):
                 logger.warning("Gemini model '%s' unavailable (%s) — trying next fallback model...", m_name, exc)
                 last_exc = exc
                 continue
