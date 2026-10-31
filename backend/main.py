@@ -52,7 +52,7 @@ EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").
 EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
 # Generation model
-GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-1.5-flash").strip()
+GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.5-flash-lite").strip()
 GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
 # --------------------------------------------------------------------------- #
 # HuggingFace Inference API Configuration (fallback chain)
@@ -587,39 +587,21 @@ def _call_hf_legacy(prompt: str, model_id: str) -> str:
 
 
 def call_huggingface_model(prompt: str, model_id: str) -> str:
-    """POST to Hugging Face via the modern Router first, with fallback to legacy endpoint."""
-    trimmed_prompt = prepare_prompt_for_hf(prompt, max_chars=9000)
+    """POST to Hugging Face via the modern Router first, with automatic fallback to classic legacy endpoint."""
+    trimmed_prompt = prepare_prompt_for_hf(prompt, max_chars=8000)
 
-    # 1. Try modern Inference Providers Router (fast, runs DeepSeek, Qwen 72B, Llama 3.3)
+    # 1. Try modern Inference Providers Router (best for DeepSeek-R1, Qwen2.5-72B)
     try:
         raw_text = _call_hf_router(trimmed_prompt, model_id)
-        if raw_text:
+        if raw_text and len(raw_text.strip()) > 0:
             return _format_model_response(raw_text)
-    except urllib.error.HTTPError as exc:
-        body = ""
-        try:
-            body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        b_lower = body.lower()
-        if exc.code == 429:
-            raise _HFError("rate_limit", f"HTTP 429 from {model_id}") from exc
-        if exc.code in (401, 403):
-            if any(k in b_lower for k in ("gated", "access", "permission", "agreement", "terms", "unauthorized")):
-                raise _HFError("unavailable", f"{model_id} requires license approval on Hugging Face") from exc
-        if exc.code == 413 or "too many tokens" in b_lower or "input length" in b_lower:
-            raise _HFError("token_limit", f"Token limit exceeded on {model_id}") from exc
-        # If router returned 404 or unsupported model, fall through to legacy endpoint
-        logger.debug("HF router returned HTTP %d for %s; trying legacy endpoint.", exc.code, model_id)
-    except _HFError:
-        raise
-    except Exception as exc:
-        logger.debug("HF router call for %s failed (%s); trying legacy endpoint.", model_id, exc)
+    except Exception as router_err:
+        logger.debug("HF router call for %s skipped (%s) — falling back to classic serverless.", model_id, router_err)
 
-    # 2. Fallback: try classic legacy endpoint
+    # 2. Fallback: classic serverless endpoint (runs free-tier 7B/8B models reliably)
     try:
         raw_text = _call_hf_legacy(trimmed_prompt, model_id)
-        if raw_text:
+        if raw_text and len(raw_text.strip()) > 0:
             return _format_model_response(raw_text)
     except urllib.error.HTTPError as exc:
         body = ""
@@ -634,9 +616,9 @@ def call_huggingface_model(prompt: str, model_id: str) -> str:
             raise _HFError("loading", f"{model_id} cold starting") from exc
         if exc.code == 413 or "too many tokens" in b_lower:
             raise _HFError("token_limit", f"Token limit on {model_id}") from exc
-        raise _HFError("unavailable", f"HTTP {exc.code}: {body[:150]}") from exc
+        raise _HFError("unavailable", f"HTTP {exc.code} from {model_id}: {body[:100]}") from exc
     except Exception as exc:
-        raise _HFError("unavailable", f"Network failure on {model_id}: {exc}") from exc
+        raise _HFError("unavailable", f"Network error calling {model_id}: {exc}") from exc
 
     raise _HFError("unavailable", f"Empty response from {model_id}")
 
@@ -738,19 +720,21 @@ def select_models_for_workflow(query: str = "", mode: str = "detailed") -> list[
 
 
 def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, str]:
-    """Call Google Gemini with automatic fallback across known active models."""
+    """Call Google Gemini with automatic fallback across known valid Gemini 3 and 2 models."""
     configured_model = GENERATION_MODEL.strip()
 
-    # Normalize away known deprecated or preview model strings that cause 404
-    bad_prefixes = ("2.5-pro", "3.8", "3.5", "3.1")
-    if any(b in configured_model for b in bad_prefixes):
-        configured_model = "gemini-1.5-flash"
+    # If the user or environment has a deprecated model name like gemini-2.5-pro, normalize it
+    if "2.5-pro" in configured_model or not configured_model:
+        configured_model = "gemini-3.5-flash-lite"
 
+    # Try Gemini 3 generation models first as requested, followed by stable fallbacks
     candidates = [
         configured_model,
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
         "gemini-2.5-flash",
+        "gemini-1.5-flash",
     ]
     seen = set()
     models_to_try = []
@@ -762,24 +746,13 @@ def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, 
     last_exc = None
     for m_name in models_to_try:
         try:
-            logger.info("Attempting Gemini generation with model: %s", m_name)
+            logger.info("Calling Gemini model: %s", m_name)
             gm = genai.GenerativeModel(m_name, generation_config=_generation_config)
             chat_session = gm.start_chat(history=gemini_history)
             response = call_gemini(chat_session.send_message, prompt)
             return response.text, m_name
         except Exception as exc:
-            exc_str = str(exc).lower()
-            model_error_signals = (
-                "not found", "no longer available", "deprecated", "not supported",
-                "invalid model", "does not exist", "unsupported", "is not available",
-            )
-            # Catch 404, NotFound, or deprecation notices and seamlessly continue to the next model
-            if any(sig in exc_str for sig in model_error_signals) or isinstance(exc, gexc.NotFound):
-                logger.warning("Gemini model '%s' unavailable (%s) — trying next fallback model...", m_name, exc)
-                last_exc = exc
-                continue
-            if isinstance(exc, gexc.ResourceExhausted) or "quota" in exc_str:
-                raise to_http_error(exc, "Generation") from exc
+            logger.warning("Gemini model '%s' failed (%s) — trying next model in chain...", m_name, exc)
             last_exc = exc
             continue
 
