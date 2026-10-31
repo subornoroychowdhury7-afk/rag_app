@@ -77,7 +77,7 @@ export default function LandingView({
       failReason:
         "Almost all web-based PDF chatbots extract only embedded digital font glyphs. Scanned agreements, archived research papers, receipts, or photocopies extract 0 bytes of text and fail silently or throw 'corrupted file' errors.",
       docQASolution:
-        "DocQ&A runs a dual-layer extraction engine. PyMuPDF extracts native digital text; if any page has no selectable text, it is rendered at 200 DPI into high-resolution images and run through Tesseract OCR. If Tesseract is unavailable on the host, it automatically delegates to Gemini 2.5 Flash's native multimodal PDF vision transcription.",
+        "DocQ&A runs a dual-layer extraction engine. PyMuPDF extracts native digital text; if any page has no selectable text, it is rendered at 200 DPI into high-resolution images and run through Tesseract OCR. If Tesseract is unavailable on the host, it automatically delegates to Gemini 3.8 Flash's native multimodal PDF vision transcription.",
       codeProof: "Verified in backend/main.py (lines 313-401: extract_pdf_text & ocr_pdf_with_gemini)",
       proofDetails: [
         "PyMuPDF per-page selectable text analysis",
@@ -393,7 +393,7 @@ export default function LandingView({
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
                 Embeddings are mapped via <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-embedding-2</code> (768 dimensions),
-                and answers are synthesized by <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-2.5-flash</code> running extended reasoning with up to 8,192 tokens.
+                and answers are synthesized by <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-3.8-flash</code> with deep thinking mode and up to 8,192 output tokens.
               </p>
             </div>
 

@@ -47,8 +47,8 @@ genai.configure(api_key=GEMINI_API_KEY)
 EMBEDDING_MODEL = (os.getenv("EMBEDDING_MODEL") or "models/gemini-embedding-2").strip()
 EMBEDDING_DIM = int((os.getenv("EMBEDDING_DIM") or "768").strip())
 
-# Primary Generation model: Gemini 3.8 Flash Lite
-GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.8-flash-lite").strip()
+# Primary Generation model: Gemini 3.8 Flash
+GENERATION_MODEL = (os.getenv("GENERATION_MODEL") or "gemini-3.8-flash").strip()
 GENERATION_TEMPERATURE = float((os.getenv("GENERATION_TEMPERATURE") or "0.2").strip())
 
 # Generation config: high token limit + low temperature for grounded, precise, high-accuracy answers
@@ -403,20 +403,19 @@ def require_api_key() -> None:
 
 
 def generate_with_gemini(prompt: str, gemini_history: list[dict]) -> tuple[str, str]:
-    """Call Google Gemini with automatic fallback across known Gemini flash lite and flash models.
+    """Call Google Gemini with automatic fallback across known Gemini flash models.
 
-    Primary: gemini-3.8-flash-lite. If Google returns 404/Not Found for the model name,
+    Primary: gemini-3.8-flash. If Google returns 404/Not Found for the model name,
     it automatically falls back to other known Gemini flash models.
     """
     configured_model = GENERATION_MODEL.strip()
     if not configured_model:
-        configured_model = "gemini-3.8-flash-lite"
+        configured_model = "gemini-3.8-flash"
 
     candidates = [
         configured_model,
-        "gemini-3.8-flash-lite",
         "gemini-3.8-flash",
-        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash-lite",
         "gemini-2.5-flash",
         "gemini-1.5-flash",
     ]
