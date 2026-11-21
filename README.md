@@ -6,7 +6,7 @@ A Retrieval-Augmented Generation (RAG) application that lets you ask natural-lan
 
 | Surface | URL |
 |---|---|
-| Frontend (Vercel) | https://rag-app-blush.vercel.app |
+| Frontend (Vercel) | https://rag-app-three-tau.vercel.app/ |
 | Backend API (Render) | https://rag-app-1-rqg6.onrender.com |
 | API docs (Swagger UI) | https://rag-app-1-rqg6.onrender.com/docs |
 
