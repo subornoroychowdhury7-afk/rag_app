@@ -28,9 +28,6 @@ from fastapi.responses import JSONResponse
 from google.api_core import exceptions as gexc
 from pydantic import BaseModel, Field
 
-from langgraph_workflow import DocQAAgentGraph
-from mcp_manager import MCPManager, mcp_manager
-
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
@@ -485,7 +482,7 @@ def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list
 # --------------------------------------------------------------------------- #
 # FastAPI App & Endpoints
 # --------------------------------------------------------------------------- #
-app = FastAPI(title="DocQ&A Agent API (LangGraph + MCP)")
+app = FastAPI(title="DocQ&A Assistant RAG API")
 
 ALLOWED_ORIGINS = [
     o.strip()
@@ -517,11 +514,8 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 def health():
     return {
         "status": "ok",
-        "app": "DocQ&A",
         "gemini_configured": API_KEY_OK,
         "generation_model": GENERATION_MODEL,
-        "langgraph_enabled": True,
-        "mcp_enabled": True,
     }
 
 
@@ -628,42 +622,8 @@ class ChatRequest(BaseModel):
     mode: Optional[str] = "detailed"
 
 
-class MCPExecuteRequest(BaseModel):
-    tool: str
-    arguments: dict = Field(default_factory=dict)
-
-
-def _query_chroma_helper(query_vector: list[float], n_results: int, where_filter: Optional[dict] = None) -> dict:
-    kwargs = {
-        "query_embeddings": [query_vector],
-        "n_results": n_results,
-        "include": ["documents", "distances", "metadatas"],
-    }
-    if where_filter:
-        kwargs["where"] = where_filter
-    return collection.query(**kwargs)
-
-
-def _count_collection_helper(where_filter: Optional[dict] = None) -> int:
-    if where_filter:
-        return len(collection.get(where=where_filter, include=[])["ids"])
-    return collection.count()
-
-
-# Initialize the Compiled DocQ&A LangGraph Agent
-docqa_graph = DocQAAgentGraph(
-    embed_fn=embed_text,
-    generate_fn=generate_with_gemini,
-    query_chroma_fn=_query_chroma_helper,
-    count_collection_fn=_count_collection_helper,
-    list_docs_fn=get_documents,
-    mcp=mcp_manager,
-)
-
-
 @app.post("/chat")
-async def chat(request: ChatRequest):
-    """Orchestrate query reasoning through DocQ&A LangGraph and MCP tools."""
+def chat(request: ChatRequest):
     query = request.query.strip()
     if not query:
         raise HTTPException(400, "Query must not be empty.")
@@ -671,81 +631,209 @@ async def chat(request: ChatRequest):
         raise HTTPException(400, f"Query is too long (limit is {MAX_QUERY_CHARS} characters).")
     require_api_key()
 
-    initial_state = {
-        "query": query,
-        "history": [msg.model_dump() for msg in request.history],
-        "doc_filter": sanitize_filename(request.doc_filter) if request.doc_filter else None,
-        "mode": request.mode or "detailed",
-        "loop_step": 0,
-        "execution_steps": [],
-    }
+    where_filter = None
+    if request.doc_filter and request.doc_filter.strip():
+        filter_name = sanitize_filename(request.doc_filter)
+        where_filter = {"source": filter_name}
+
+    if where_filter:
+        total = len(collection.get(where=where_filter, include=[])["ids"])
+    else:
+        total = collection.count()
+
+    greeting_regex = re.compile(
+        r"^(hi|hello|hey|greetings|good\s+(morning|afternoon|evening))\b|"
+        r"\b(who\s+are\s+you|what\s+can\s+you\s+do|how\s+can\s+you\s+help|what\s+is\s+this\s+app)\b|"
+        r"\b(what\s+documents|list\s+documents|which\s+files|show\s+documents|what\s+do\s+you\s+know)\b|"
+        r"\b(help|how\s+to\s+use)\b",
+        re.IGNORECASE,
+    )
+
+    if total == 0:
+        if greeting_regex.search(query):
+            return {
+                "answer": (
+                    "Hello! I am your **DocQ&A Assistant**. You currently do not have any documents indexed. "
+                    "Please upload a PDF, Markdown, or text file using the sidebar to begin asking questions!"
+                ),
+                "sources": [],
+                "source_files": [],
+                "citations": [],
+                "suggested_followups": [],
+                "model_used": "system",
+            }
+        return {
+            "answer": NO_ANSWER,
+            "sources": [],
+            "source_files": [],
+            "citations": [],
+            "suggested_followups": [],
+            "model_used": "system",
+        }
+
+    search_query = contextualize_query(query, request.history)
 
     try:
-        final_state = await docqa_graph.invoke_async(initial_state)
+        query_vector = embed_text(search_query, "retrieval_query")
+    except Exception as exc:
+        logger.exception("Query embedding failed")
+        raise to_http_error(exc, "Embedding") from exc
+
+    candidate_k = min(TOP_K * 2, total)
+    query_kwargs = {
+        "query_embeddings": [query_vector],
+        "n_results": candidate_k,
+        "include": ["documents", "distances", "metadatas"],
+    }
+    if where_filter:
+        query_kwargs["where"] = where_filter
+
+    results = collection.query(**query_kwargs)
+    distances: list[float] = results["distances"][0] if results.get("distances") else []
+    docs: list[str] = results["documents"][0] if results.get("documents") else []
+    metadatas: list[dict] = results["metadatas"][0] if results.get("metadatas") else []
+
+    scored_candidates = []
+    for doc, meta, dist in zip(docs, metadatas, distances):
+        source_name = (meta or {}).get("source", "Document")
+        chunk_idx = (meta or {}).get("chunk_index", 0)
+        vec_sim = max(0.0, 1.0 - dist)
+        kw_sim = compute_keyword_score(search_query, doc)
+
+        if kw_sim > 0:
+            composite_score = 0.65 * vec_sim + 0.35 * kw_sim
+        else:
+            composite_score = 0.85 * vec_sim
+
+        effective_cutoff = MAX_DISTANCE + (0.08 if kw_sim > 0.3 else 0.0)
+        if dist <= effective_cutoff:
+            relevance = max(15, min(99, round(composite_score * 100)))
+            scored_candidates.append({
+                "text": doc,
+                "source": source_name,
+                "chunk_index": chunk_idx,
+                "relevance": relevance,
+                "composite_score": composite_score,
+                "dist": dist,
+            })
+
+    scored_candidates.sort(key=lambda x: x["composite_score"], reverse=True)
+    citations = scored_candidates[:TOP_K]
+
+    retrieved_chunks = [c["text"] for c in citations]
+    source_files = sorted(list({c["source"] for c in citations}))
+
+    if not retrieved_chunks:
+        if greeting_regex.search(query):
+            doc_items = get_documents()
+            if doc_items:
+                doc_summary = "\n".join(f"- **{d['name']}** ({d['chunks']} indexed passages)" for d in doc_items)
+                greeting_answer = (
+                    f"Hello! I am your **DocQ&A Assistant**, ready to help you analyze and extract verified insights "
+                    f"from your knowledge base.\n\n"
+                    f"### 📚 Available Documents ({len(doc_items)} total):\n"
+                    f"{doc_summary}\n\n"
+                    f"### 💡 What I Can Help You With:\n"
+                    f"- **In-depth Q&A**: Ask targeted questions and get comprehensive answers with inline citations `[DocumentName.pdf]`.\n"
+                    f"- **Cross-Document Synthesis**: Compare findings, metrics, and arguments across multiple files.\n"
+                    f"- **Technical & Mathematical Reasoning**: Step-by-step problem solving with clean LaTeX formulas ($E=mc^2$).\n"
+                    f"- **Executive Briefings**: Summaries, data tables, and structured procedural guides.\n\n"
+                    f"Try asking a question about any of your documents above to begin!"
+                )
+                sample_followups = [
+                    f"What are the key findings in {doc_items[0]['name']}?",
+                    "Can you summarize the main themes across all documents?",
+                    "What actionable takeaways are outlined in the files?",
+                ]
+                return {
+                    "answer": greeting_answer,
+                    "sources": [],
+                    "source_files": [d["name"] for d in doc_items],
+                    "citations": [],
+                    "suggested_followups": sample_followups,
+                    "model_used": "system",
+                }
+            else:
+                return {
+                    "answer": (
+                        "Hello! I am your **DocQ&A Assistant**. You currently do not have any documents uploaded. "
+                        "Please upload a PDF, Markdown, or text file via the sidebar to get started!"
+                    ),
+                    "sources": [],
+                    "source_files": [],
+                    "citations": [],
+                    "suggested_followups": [],
+                    "model_used": "system",
+                }
+
+        return {
+            "answer": NO_ANSWER,
+            "sources": [],
+            "source_files": [],
+            "citations": [],
+            "suggested_followups": [],
+            "model_used": "system",
+        }
+
+    context_blocks = []
+    for i, c in enumerate(citations, 1):
+        context_blocks.append(
+            f"=== EXCERPT {i} [Source: {c['source']} | Passage #{c['chunk_index']} | Match: {c['relevance']}%] ===\n"
+            f"{c['text']}"
+        )
+    context_string = "\n\n".join(context_blocks)
+
+    mode_key = (request.mode or "detailed").lower()
+    mode_instruction = MODE_INSTRUCTIONS.get(mode_key, MODE_INSTRUCTIONS["detailed"])
+
+    prompt = PROMPT_TEMPLATE.format(
+        context_string=context_string,
+        query=query,
+        mode_instruction=mode_instruction,
+    )
+
+    gemini_history = []
+    recent_history = request.history[-MAX_HISTORY_ITEMS:]
+    for msg in recent_history:
+        role = "model" if msg.role == "assistant" else "user"
+        gemini_history.append({"role": role, "parts": [msg.content[:16000]]})
+
+    try:
+        answer, model_used = generate_with_gemini(prompt, gemini_history)
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("DocQ&A LangGraph agent execution failed")
-        raise to_http_error(exc, "DocQ&A Agent Workflow") from exc
+        logger.exception("Generation failed")
+        raise to_http_error(exc, "Generation") from exc
+
+    # Parse internal thinking / reasoning protocol if present
+    thinking = None
+    if "<thinking>" in answer and "</thinking>" in answer:
+        parts = answer.split("</thinking>")
+        thinking = parts[0].replace("<thinking>", "").strip()
+        answer = parts[1].strip()
+    elif "<think>" in answer and "</think>" in answer:
+        parts = answer.split("</think>")
+        thinking = parts[0].replace("<think>", "").strip()
+        answer = parts[1].strip()
+
+    suggested_followups: list[str] = []
+    if "FOLLOW_UPS:" in answer:
+        parts = answer.split("FOLLOW_UPS:")
+        answer = parts[0].strip()
+        for line in parts[1].splitlines():
+            cleaned = line.strip().lstrip("-*•0123456789. ")
+            if len(cleaned) > 5:
+                suggested_followups.append(cleaned)
+        suggested_followups = suggested_followups[:3]
 
     return {
-        "answer": final_state.get("answer", NO_ANSWER),
-        "thinking": final_state.get("thinking"),
-        "sources": final_state.get("documents", []),
-        "source_files": final_state.get("source_files", []),
-        "citations": final_state.get("citations", []),
-        "suggested_followups": final_state.get("suggested_followups", []),
-        "model_used": final_state.get("model_used", GENERATION_MODEL),
-        "execution_steps": final_state.get("execution_steps", []),
-        "mcp_tools_used": final_state.get("mcp_tool_results", []),
-        "pipeline": "langgraph-agentic-crag",
-    }
-
-
-@app.get("/mcp/tools")
-async def get_mcp_tools():
-    """List all registered Model Context Protocol (MCP) tools."""
-    tools = await mcp_manager.list_tools()
-    return {"tools": tools, "count": len(tools)}
-
-
-@app.post("/mcp/execute")
-async def execute_mcp_tool(req: MCPExecuteRequest):
-    """Directly execute a Model Context Protocol (MCP) tool."""
-    result = await mcp_manager.execute_tool(req.tool, req.arguments)
-    return {
-        "tool": result.tool_name,
-        "success": result.success,
-        "output": result.output,
-        "error": result.error,
-        "server": result.server,
-    }
-
-
-@app.get("/graph/info")
-def get_graph_info():
-    """Returns the LangGraph architecture and node specifications for DocQ&A."""
-    return {
-        "name": "DocQAAgentGraph",
-        "app": "DocQ&A",
-        "framework": "LangGraph",
-        "protocol": "Model Context Protocol (MCP)",
-        "nodes": [
-            "analyze_query",
-            "retrieve",
-            "grade_and_route",
-            "execute_mcp_tools",
-            "generate_answer",
-            "verify_grounding",
-            "conversational_fallback",
-        ],
-        "features": [
-            "Adaptive & Corrective RAG (CRAG)",
-            "Multi-Turn Query Contextualization",
-            "MCP Dynamic Tool Execution",
-            "Deep Chain-of-Thought (<thinking>) Verification",
-            "Anti-Hallucination Reflection Loop",
-        ],
+        "answer": answer,
+        "thinking": thinking,
+        "sources": retrieved_chunks,
+        "source_files": source_files,
+        "citations": citations,
+        "suggested_followups": suggested_followups,
     }
 
 

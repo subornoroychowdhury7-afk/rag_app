@@ -17,14 +17,6 @@ export interface Citation {
   chunk_index?: number;
 }
 
-export interface McpToolResult {
-  tool: string;
-  success: boolean;
-  output: string;
-  error?: string;
-  server?: string;
-}
-
 export interface ChatResult {
   answer: string;
   thinking?: string;
@@ -32,10 +24,6 @@ export interface ChatResult {
   source_files?: string[];
   citations?: Citation[];
   suggested_followups?: string[];
-  execution_steps?: string[];
-  mcp_tools_used?: McpToolResult[];
-  pipeline?: string;
-  model_used?: string;
 }
 
 export interface DocumentSummaryResult {
@@ -154,28 +142,3 @@ export function getDocuments(): Promise<{ name: string; chunks: number }[]> {
     method: "GET",
   });
 }
-
-export function getMcpTools(): Promise<{ tools: any[]; count: number }> {
-  return request<{ tools: any[]; count: number }>("/mcp/tools", {
-    method: "GET",
-  });
-}
-
-export function getGraphInfo(): Promise<{
-  name: string;
-  framework: string;
-  protocol: string;
-  nodes: string[];
-  features: string[];
-}> {
-  return request<{
-    name: string;
-    framework: string;
-    protocol: string;
-    nodes: string[];
-    features: string[];
-  }>("/graph/info", {
-    method: "GET",
-  });
-}
-

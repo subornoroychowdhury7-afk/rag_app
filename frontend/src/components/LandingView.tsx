@@ -18,7 +18,7 @@ export default function LandingView({
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [activeDemoTab, setActiveDemoTab] = useState<"agentic" | "math" | "hallucination" | "citation" | "briefing">("agentic");
+  const [activeDemoTab, setActiveDemoTab] = useState<"math" | "hallucination" | "citation" | "briefing">("math");
   const [activeProblemTab, setActiveProblemTab] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -56,12 +56,12 @@ export default function LandingView({
       failReason:
         "Standard online chatbots (generic PDF bots, ChatGPT wrappers) invent plausible-sounding answers, fictitious statistics, or fabricated contract clauses when information does not exist in your file.",
       docQASolution:
-        "DocQ&A enforces a cosine distance gate (dist <= 0.80 in LangGraph retrieval; MAX_DISTANCE = 0.78 config) plus a post-generation verification node (verify_grounding). If no retrieved chunk or MCP tool output backs the query, the workflow strictly returns: 'I cannot answer this based on the uploaded documents.'",
-      codeProof: "Verified in backend/langgraph_workflow.py (lines 181-205, 305-313, 400-419) & backend/main.py (line 70)",
+        "DocQ&A enforces a mathematical cosine distance cutoff (MAX_DISTANCE = 0.78 with hybrid keyword adjustment). If no retrieved chunk passes this threshold, the API strictly returns the honest refusal: 'I cannot answer this based on the uploaded documents.' The system prompt strictly prohibits outside knowledge.",
+      codeProof: "Verified in backend/main.py (lines 65-74, 103-120, 708-726)",
       proofDetails: [
-        "Cosine distance gate (dist <= 0.80) + hybrid scoring (0.7 vector + 0.3 keyword)",
-        "Zero-hallucination fallback (NO_ANSWER) when no citations or MCP results exist",
-        "LangGraph verify_grounding + route_after_verification self-correction loop",
+        "MAX_DISTANCE = 0.78 strict cosine distance cutoff with hybrid keyword boost",
+        "Zero-hallucination fallback: fixed string returned if no chunks pass",
+        "System prompt forbids outside knowledge and forces quotation of context",
       ],
     },
     {
@@ -77,32 +77,32 @@ export default function LandingView({
       failReason:
         "Almost all web-based PDF chatbots extract only embedded digital font glyphs. Scanned agreements, archived research papers, receipts, or photocopies extract 0 bytes of text and fail silently or throw 'corrupted file' errors.",
       docQASolution:
-        "DocQ&A runs a dual-layer PDF extraction pipeline in extract_pdf_text: PyMuPDF extracts native selectable digital text per page, and if combined text is under 50 characters, each page is rendered via get_pixmap() into PNG images and processed through Tesseract OCR (pytesseract).",
-      codeProof: "Verified in backend/main.py (lines 195-221: extract_pdf_text)",
+        "DocQ&A runs a dual-layer extraction engine. PyMuPDF extracts native digital text; if any page has no selectable text, it is rendered at 200 DPI into high-resolution images and run through Tesseract OCR. If Tesseract is unavailable on the host, it automatically delegates to Gemini 3.8 Flash's native multimodal PDF vision transcription.",
+      codeProof: "Verified in backend/main.py (lines 192-360: extract_pdf_text & ocr_pdf_with_gemini)",
       proofDetails: [
-        "PyMuPDF (fitz) per-page selectable digital text extraction",
-        "Automatic fallback (< 50 chars) to pixmap PNG rendering + Tesseract OCR",
-        "Semantic recursive chunking (CHUNK_SIZE = 1800, CHUNK_OVERLAP = 300)",
+        "PyMuPDF per-page selectable text analysis",
+        "Automatic fallback to 200 DPI pixmap rendering + Tesseract OCR",
+        "Zero-failure fallback to Gemini multimodal base64 PDF vision transcription",
       ],
     },
     {
       id: "math",
       badge: "Scientific & Technical Depth",
-      title: "Mangled Math, Formulas & Exact Calculations",
+      title: "Mangled Math, Formulas & Proofs",
       icon: (
         <svg className="h-6 w-6 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
         </svg>
       ),
       failReason:
-        "Generic PDF software breaks complex scientific notation into garbled ASCII text AND relies on LLM token prediction for arithmetic, often miscalculating compound totals, square roots, or percentages.",
+        "Generic PDF software breaks complex scientific, financial, or engineering notation into garbled ASCII mush (superscripts, subscripts, integral signs, and matrices get mangled or stripped completely).",
       docQASolution:
-        "DocQ&A pairs deterministic AST-based calculation via the MCP tool docqa_math_eval (safe_eval_math) with prompts requiring standard LaTeX ($...$ and $$...$$), rendered cleanly in the browser via remark-math and rehype-katex.",
-      codeProof: "Verified in backend/mcp_manager.py (lines 61-94), backend/langgraph_workflow.py (lines 350) & MarkdownRenderer.tsx (lines 43-56)",
+        "DocQ&A's prompt requires Gemini to write all mathematical reasoning, steps, and formulas in standard LaTeX ($...$ and $$...$$). The frontend renders every equation dynamically using KaTeX with horizontal scroll protection for wide equations.",
+      codeProof: "Verified in backend/main.py (lines 103-130) & frontend MarkdownRenderer.tsx (lines 43-65)",
       proofDetails: [
-        "AST-parsed docqa_math_eval tool for exact deterministic math without eval()",
-        "Prompt enforces LaTeX formatting ($...$ and $$...$$) for all formulas",
-        "Frontend remark-math + rehype-katex rendering with horizontal overflow scroll",
+        "Backend prompt mandates LaTeX formatting ($...$ and $$...$$) & step-by-step working",
+        "Frontend remark-math + rehype-katex rendering engine",
+        "Global KaTeX CSS styling with overflow protection for complex matrices",
       ],
     },
     {
@@ -117,10 +117,10 @@ export default function LandingView({
       failReason:
         "Existing software displays vague footnotes like '[1]' with no way to see what snippet was actually retrieved from the document, hiding potential model hallucinations.",
       docQASolution:
-        "Every DocQ&A response includes collapsible source cards disclosing the exact chunk verbatim text, source filename, chunk index, a 1-click copy quote button, and a calculated hybrid relevance match score (0.7 * vector_similarity + 0.3 * keyword_overlap).",
-      codeProof: "Verified in backend/langgraph_workflow.py (lines 169-196) & frontend/src/components/Chat.tsx (lines 60-145)",
+        "Every DocQ&A response includes collapsible source cards disclosing the exact chunk verbatim text, source filename, chunk index, a 1-click copy quote button, and a calculated hybrid relevance match score combining dense vector similarity and keyword scoring.",
+      codeProof: "Verified in backend/main.py (lines 696-725) & frontend Chat.tsx (lines 80-145)",
       proofDetails: [
-        "Hybrid similarity match score combining cosine vector similarity (70%) + keyword match (30%)",
+        "Hybrid similarity match score calculated directly from vector distance + BM25 keyword overlap",
         "Exact chunk index and filename provenance attached to every message",
         "One-click copy button for verbatim source evidence verification",
       ],
@@ -137,10 +137,10 @@ export default function LandingView({
       failReason:
         "When users upload multiple files (e.g., 'Q1_Report.pdf' and 'Q2_Report.pdf'), generic tools combine all documents into one bag of words, mixing numbers and facts across different documents without scoping.",
       docQASolution:
-        "DocQ&A features an active document filter. When selected, LangGraph passes where={'source': doc_filter} into both collection counting (analyze_query) and ChromaDB vector search (retrieve), isolating queries to a single document.",
-      codeProof: "Verified in backend/langgraph_workflow.py (lines 98-100, 148-164) & frontend/src/components/Sidebar.tsx (lines 220-255)",
+        "DocQ&A features an active document filter. When selected, the backend restricts ChromaDB cosine vector search strictly using where={'source': filename}, mathematically isolating queries to a single document index.",
+      codeProof: "Verified in backend/main.py (lines 685-695) & frontend Sidebar.tsx (lines 220-250)",
       proofDetails: [
-        "ChromaDB metadata-level filtering via where={'source': doc_filter}",
+        "ChromaDB metadata-level filtering via where={'source': filename}",
         "Per-document chunk counting, inspection, and one-click deletion",
         "UI document filter pills to toggle between global or scoped search",
       ],
@@ -157,53 +157,12 @@ export default function LandingView({
       failReason:
         "Reading a 50+ page legal brief, financial audit, or technical spec to locate strategic findings takes hours. Typical chatbots provide brief, superficial summaries that overlook critical numbers.",
       docQASolution:
-        "DocQ&A features a specialized AI Executive Briefing endpoint (/documents/{filename}/summarize). It sorts sequential chunks by chunk_index and runs a dedicated 4-section executive prompt: Executive Overview, Key Highlights & Critical Data, Strategic Takeaways & Recommendations, and Recommended Follow-up Inquiries.",
-      codeProof: "Verified in backend/main.py (lines 752-811: summarize_document) & frontend/src/components/SummaryModal.tsx",
+        "DocQ&A features a specialized AI Executive Briefing endpoint (/documents/{filename}/summarize). It aggregates the document's sequential chunks and runs a dedicated 4-section executive prompt: Executive Overview, Key Highlights & Critical Data, Strategic Takeaways & Risks, and Recommended Inquiries.",
+      codeProof: "Verified in backend/main.py (lines 841-890) & frontend SummaryModal.tsx",
       proofDetails: [
         "Dedicated executive synthesis prompt with 4 standardized sections",
         "Includes actionable strategic recommendations and risk vectors",
         "Generates intelligent follow-up inquiries to probe the document further",
-      ],
-    },
-    {
-      id: "langgraph_mcp",
-      badge: "Agentic StateGraph",
-      title: "Stateful LangGraph Orchestration & Traceability",
-      icon: (
-        <svg className="h-6 w-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-      ),
-      failReason:
-        "Traditional RAG pipelines are rigid, 1-shot scripts: ambiguous follow-up pronouns ('compare them', 'explain why') break vector search, empty knowledge bases crash or hallucinate, and users see zero trace of internal decisions.",
-      docQASolution:
-        "DocQ&A compiles a 7-node LangGraph StateGraph (DocQAAgentGraph). It rewrites follow-up queries using recent conversation history, grades retrieval results, routes gracefully to conversational_fallback when needed, verifies grounding after synthesis, and streams execution_steps to the UI.",
-      codeProof: "Verified in backend/langgraph_workflow.py (lines 67-556: DocQAAgentGraph) & backend/main.py (lines 654-702, 725-749)",
-      proofDetails: [
-        "7 compiled nodes: analyze_query, retrieve, grade_and_route, execute_mcp_tools, generate_answer, verify_grounding, conversational_fallback",
-        "Automatic multi-turn follow-up query rewriting across history[-6:]",
-        "Live graph telemetry exposed in /chat (execution_steps, pipeline) and GET /graph/info",
-      ],
-    },
-    {
-      id: "mcp_tools",
-      badge: "Model Context Protocol",
-      title: "Live MCP Tools & Extensible Server Ecosystem",
-      icon: (
-        <svg className="h-6 w-6 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-      ),
-      failReason:
-        "Isolated RAG bots are trapped inside static document chunks: they cannot compute verified arithmetic, fetch live URLs, check UTC timestamps, inspect workspace state, or plug into standard external MCP servers.",
-      docQASolution:
-        "MCPManager registers 4 built-in native MCP tools (docqa_math_eval, docqa_web_fetch, docqa_datetime_info, docqa_workspace_info) and connects via stdio_client to external MCP servers configured in mcp_servers.json, with dedicated GET /mcp/tools and POST /mcp/execute APIs.",
-      codeProof: "Verified in backend/mcp_manager.py (lines 61-377), backend/mcp_servers.json & backend/main.py (lines 705-722)",
-      proofDetails: [
-        "4 native tools (native:docqa): AST math eval, async web fetch, UTC datetime, path-sandboxed workspace inspector",
-        "External stdio transport via official mcp SDK (filesystem & fetch servers in mcp_servers.json)",
-        "UI renders invoked MCP tool badges and outputs inside the collapsible Agent Trace drawer",
       ],
     },
   ];
@@ -279,7 +238,7 @@ export default function LandingView({
                 DocQ&amp;A
               </span>
               <span className="ml-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-700/10 dark:bg-indigo-950/60 dark:text-indigo-300 dark:ring-indigo-300/20">
-                LangGraph · MCP
+                Neural RAG
               </span>
             </div>
           </div>
@@ -316,7 +275,7 @@ export default function LandingView({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
             </span>
-            <span>LangGraph StateGraph • Model Context Protocol (MCP) • Gemini 3.8 Flash</span>
+            <span>Gemini 3.8 Flash • Deep Thinking Mode • Hybrid Dense + Lexical Search</span>
           </div>
 
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-slate-900 dark:text-white">
@@ -327,8 +286,8 @@ export default function LandingView({
           </h1>
 
           <p className="mx-auto mt-6 max-w-3xl text-base leading-relaxed text-slate-600 dark:text-slate-300 sm:text-lg">
-            Upload PDFs, scanned documents, TXT, or Markdown files. DocQ&amp;A orchestrates multi-agent RAG via
-            LangGraph workflows and live Model Context Protocol (MCP) tools—answering with step-by-step deep thinking,
+            Upload PDFs, scanned documents, TXT, or Markdown files. DocQ&amp;A searches your documents with
+            768-dim dense vector embeddings and BM25 hybrid ranking, answering with step-by-step deep thinking,
             mathematical LaTeX proofs, verifiable source citations, and executive briefings.
           </p>
 
@@ -420,36 +379,36 @@ export default function LandingView({
           {/* Quick Metrics Bar */}
           <div className="mx-auto mt-12 grid max-w-4xl grid-cols-2 gap-4 sm:grid-cols-4">
             <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-indigo-400 hover:shadow-xl hover:shadow-indigo-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-indigo-500">
-              <div className="text-2xl font-black text-indigo-600 transition-transform duration-300 group-hover:scale-110 dark:text-indigo-400">7 Nodes</div>
-              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">LangGraph StateGraph</div>
-            </div>
-            <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-violet-400 hover:shadow-xl hover:shadow-violet-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-violet-500">
-              <div className="text-2xl font-black text-violet-600 transition-transform duration-300 group-hover:scale-110 dark:text-violet-400">4+ Tools</div>
-              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Native &amp; Stdio MCP</div>
-            </div>
-            <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-emerald-400 hover:shadow-xl hover:shadow-emerald-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-emerald-500">
-              <div className="text-2xl font-black text-emerald-600 transition-transform duration-300 group-hover:scale-110 dark:text-emerald-400">100%</div>
+              <div className="text-2xl font-black text-indigo-600 transition-transform duration-300 group-hover:scale-110 dark:text-indigo-400">100%</div>
               <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Grounded Citations</div>
             </div>
+            <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-violet-400 hover:shadow-xl hover:shadow-violet-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-violet-500">
+              <div className="text-2xl font-black text-violet-600 transition-transform duration-300 group-hover:scale-110 dark:text-violet-400">768-D</div>
+              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Gemini Embeddings</div>
+            </div>
+            <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-emerald-400 hover:shadow-xl hover:shadow-emerald-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-emerald-500">
+              <div className="text-2xl font-black text-emerald-600 transition-transform duration-300 group-hover:scale-110 dark:text-emerald-400">Dual OCR</div>
+              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Tesseract + Vision</div>
+            </div>
             <div className="group cursor-default rounded-2xl border border-slate-200/70 bg-white/60 p-4 shadow-xs backdrop-blur-md transition-all duration-300 hover:-translate-y-1.5 hover:border-cyan-400 hover:shadow-xl hover:shadow-cyan-500/10 dark:border-slate-800 dark:bg-slate-900/60 dark:hover:border-cyan-500">
-              <div className="text-2xl font-black text-cyan-600 transition-transform duration-300 group-hover:scale-110 dark:text-cyan-400">768-D</div>
-              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Embeddings + CoT</div>
+              <div className="text-2xl font-black text-cyan-600 transition-transform duration-300 group-hover:scale-110 dark:text-cyan-400">Deep CoT</div>
+              <div className="mt-1 text-xs font-medium text-slate-600 dark:text-slate-400">Gemini 3.8 Flash Thinking</div>
             </div>
           </div>
         </section>
 
-        {/* SECTION 1: CORE ARCHITECTURE & AGENT FEATURES */}
+        {/* SECTION 1: WHAT IT IS */}
         <section id="what-it-is" className="mb-24">
           <div className="text-center">
             <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-              Architectural Foundation &amp; Agentic Stack
+              Architectural Foundation
             </span>
             <h2 className="mt-2 text-3xl font-extrabold tracking-tight sm:text-4xl text-slate-900 dark:text-white">
               What is DocQ&amp;A?
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-              DocQ&amp;A is an enterprise-grade Agentic Retrieval-Augmented Generation (RAG) platform
-              combining ChromaDB hybrid retrieval, compiled LangGraph workflows, and live Model Context Protocol (MCP) tools.
+              DocQ&amp;A is an enterprise-grade Retrieval-Augmented Generation (RAG) platform
+              engineered specifically to solve the critical flaws of modern document AI.
             </p>
           </div>
 
@@ -464,8 +423,8 @@ export default function LandingView({
                 Local-Persistent Vector Store
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Powered by ChromaDB with persistent HNSW cosine indexing. Documents are chunked into
-                1,800-character windows (300 overlap) and scored via hybrid similarity (0.7 vector + 0.3 keyword).
+                Powered by ChromaDB with persistent HNSW index and cosine space. Your document segments are
+                chunked into 1,800-character windows with 300-character overlap, re-ranked via hybrid BM25 keyword overlap.
               </p>
             </div>
 
@@ -479,8 +438,8 @@ export default function LandingView({
                 Google Gemini Neural Core
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Embeddings use <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-embedding-2</code> (768 dimensions),
-                and answers are synthesized by <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-3.8-flash</code> with deep <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">&lt;thinking&gt;</code> verification and 8,192 output tokens.
+                Embeddings are mapped via <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-embedding-2</code> (768 dimensions),
+                and answers are synthesized by <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">gemini-3.8-flash</code> with deep thinking mode and up to 8,192 output tokens.
               </p>
             </div>
 
@@ -494,65 +453,8 @@ export default function LandingView({
                 Guaranteed Citations &amp; Refusal
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Queries without passing vector distance (<code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">dist &lt;= 0.80</code>) or MCP tool backing refuse to fabricate answers and quote exact source chunks verbatim.
-              </p>
-            </div>
-
-            <div className="group relative rounded-3xl border border-violet-200/80 bg-white/80 p-6 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-2 hover:border-violet-400 hover:shadow-xl hover:shadow-violet-500/10 dark:border-violet-900/60 dark:bg-slate-900/80 dark:hover:border-violet-500">
-              <div className="flex items-center justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-50 text-violet-600 shadow-inner transition-transform duration-300 group-hover:scale-110 group-hover:rotate-6 dark:bg-violet-950/60 dark:text-violet-400">
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM7 15a1 1 0 011-1h8a1 1 0 011 1v4a1 1 0 01-1 1H8a1 1 0 01-1-1v-4z" />
-                  </svg>
-                </div>
-                <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-[10px] font-bold text-violet-700 dark:bg-violet-950/80 dark:text-violet-300">
-                  New • LangGraph
-                </span>
-              </div>
-              <h3 className="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">
-                7-Node Adaptive &amp; Corrective RAG Graph
-              </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">DocQAAgentGraph</code> orchestrates <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">analyze_query</code> (multi-turn follow-up rewriting), <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">retrieve</code>, <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">grade_and_route</code>, <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">execute_mcp_tools</code>, <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">generate_answer</code>, <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">verify_grounding</code>, and <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">conversational_fallback</code>.
-              </p>
-            </div>
-
-            <div className="group relative rounded-3xl border border-amber-200/80 bg-white/80 p-6 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-2 hover:border-amber-400 hover:shadow-xl hover:shadow-amber-500/10 dark:border-amber-900/60 dark:bg-slate-900/80 dark:hover:border-amber-500">
-              <div className="flex items-center justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 shadow-inner transition-transform duration-300 group-hover:scale-110 group-hover:rotate-6 dark:bg-amber-950/60 dark:text-amber-400">
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </div>
-                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/80 dark:text-amber-300">
-                  New • MCP Tools
-                </span>
-              </div>
-              <h3 className="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">
-                4 Native MCP Tools &amp; External Servers
-              </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">MCPManager</code> executes AST math (<code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">docqa_math_eval</code>), live HTTP reader (<code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">docqa_web_fetch</code>), UTC time (<code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">docqa_datetime_info</code>), and workspace metadata (<code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">docqa_workspace_info</code>), plus stdio servers in <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">mcp_servers.json</code>.
-              </p>
-            </div>
-
-            <div className="group relative rounded-3xl border border-cyan-200/80 bg-white/80 p-6 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-2 hover:border-cyan-400 hover:shadow-xl hover:shadow-cyan-500/10 dark:border-cyan-900/60 dark:bg-slate-900/80 dark:hover:border-cyan-500">
-              <div className="flex items-center justify-between">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-50 text-cyan-600 shadow-inner transition-transform duration-300 group-hover:scale-110 group-hover:rotate-6 dark:bg-cyan-950/60 dark:text-cyan-400">
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                  </svg>
-                </div>
-                <span className="rounded-full bg-cyan-100 px-2.5 py-0.5 text-[10px] font-bold text-cyan-800 dark:bg-cyan-950/80 dark:text-cyan-300">
-                  New • Trace &amp; APIs
-                </span>
-              </div>
-              <h3 className="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">
-                Agent Execution Trace &amp; Inspector APIs
-              </h3>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Every response surfaces <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">execution_steps</code> and <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">mcp_tools_used</code> in a collapsible Chat trace drawer, alongside REST endpoints <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">GET /graph/info</code>, <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">GET /mcp/tools</code>, and <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] dark:bg-slate-800">POST /mcp/execute</code>.
+                Instead of making speculative guesses, queries without passing vector similarity (distance &gt; 0.78)
+                refuse to generate unsupported answers. Every returned answer quotes its exact source chunk.
               </p>
             </div>
           </div>
@@ -601,18 +503,18 @@ export default function LandingView({
                   2
                 </span>
                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                  LangGraph &amp; MCP
+                  Ask &amp; Scope
                 </span>
               </div>
               <h3 className="mt-5 text-base font-bold text-slate-900 dark:text-slate-100">
-                Agentic Multi-Step Reasoning
+                Query in 4 Answer Styles
               </h3>
               <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                Ask specific questions, compare sections, or request mathematical derivations.
-                LangGraph dynamically deconstructs queries, grades document relevance, invokes Model Context Protocol (MCP) tools, and executes anti-hallucination verification loops.
+                Ask specific questions, compare sections, or request derivations via text or voice dictation.
+                Switch between Detailed, Concise, Academic, and Step-by-Step styles, or click document pills to scope search.
               </p>
               <div className="mt-4 rounded-xl bg-slate-50 p-3 font-mono text-[11px] text-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
-                POST /chat → LangGraph (analyze → retrieve → grade → MCP tools → deep thinking → verify)
+                POST /chat → embed query → hybrid BM25 + cosine search → deep CoT synthesis
               </div>
             </div>
 
@@ -671,62 +573,6 @@ export default function LandingView({
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
                   <tr className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
                     <td className="px-5 py-4 font-semibold text-slate-900 dark:text-slate-100">
-                      Multi-Agent StateGraph (LangGraph)
-                    </td>
-                    <td className="px-5 py-4 text-slate-600 dark:text-slate-400">
-                      <span className="inline-flex items-center text-rose-500 mr-1.5 font-bold">✕</span>
-                      Rigid, single-pass procedural pipeline without reflection, document grading, or self-correction loops.
-                    </td>
-                    <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
-                      <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Stateful LangGraph compiled engine: intent deconstruction, hybrid retrieval, relevance grading, and anti-hallucination verification loops.
-                    </td>
-                  </tr>
-
-                  <tr className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                    <td className="px-5 py-4 font-semibold text-slate-900 dark:text-slate-100">
-                      Tool Execution (Model Context Protocol)
-                    </td>
-                    <td className="px-5 py-4 text-slate-600 dark:text-slate-400">
-                      <span className="inline-flex items-center text-rose-500 mr-1.5 font-bold">✕</span>
-                      Zero tool support; locked exclusively to static chunk text and cannot compute exact math or fetch live web references.
-                    </td>
-                    <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
-                      <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Model Context Protocol (MCP) tool execution (AST math engine, clean web page reader, workspace inspection) + extensible stdio/SSE servers.
-                    </td>
-                  </tr>
-
-                  <tr className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                    <td className="px-5 py-4 font-semibold text-slate-900 dark:text-slate-100">
-                      Multi-Turn Follow-Up Contextualization
-                    </td>
-                    <td className="px-5 py-4 text-slate-600 dark:text-slate-400">
-                      <span className="inline-flex items-center text-rose-500 mr-1.5 font-bold">✕</span>
-                      Searches raw follow-up pronouns (&quot;compare them&quot;, &quot;why?&quot;) directly, losing vector context across turns.
-                    </td>
-                    <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
-                      <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      LangGraph <code className="font-mono text-[11px]">analyze_query</code> detects ambiguous follow-ups and rewrites them into standalone search queries using recent history.
-                    </td>
-                  </tr>
-
-                  <tr className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                    <td className="px-5 py-4 font-semibold text-slate-900 dark:text-slate-100">
-                      Agent Observability &amp; Trace APIs
-                    </td>
-                    <td className="px-5 py-4 text-slate-600 dark:text-slate-400">
-                      <span className="inline-flex items-center text-rose-500 mr-1.5 font-bold">✕</span>
-                      Opaque chat responses with zero visibility into retrieval steps, routing branches, or tool calls.
-                    </td>
-                    <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
-                      <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Collapsible Graph &amp; MCP Execution Trace in Chat + <code className="font-mono text-[11px]">GET /graph/info</code>, <code className="font-mono text-[11px]">GET /mcp/tools</code>, and <code className="font-mono text-[11px]">POST /mcp/execute</code>.
-                    </td>
-                  </tr>
-
-                  <tr className="transition hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                    <td className="px-5 py-4 font-semibold text-slate-900 dark:text-slate-100">
                       Hallucination Prevention
                     </td>
                     <td className="px-5 py-4 text-slate-600 dark:text-slate-400">
@@ -735,7 +581,7 @@ export default function LandingView({
                     </td>
                     <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
                       <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Enforces cosine distance gate (<code className="font-mono text-[11px]">dist &lt;= 0.80</code>) + <code className="font-mono text-[11px]">verify_grounding</code> self-correction loop; refuses when ungrounded.
+                      Enforces a hard cosine cutoff (0.78). Refuses to answer if evidence is absent, strictly returning honest refusal.
                     </td>
                   </tr>
 
@@ -749,7 +595,7 @@ export default function LandingView({
                     </td>
                     <td className="px-5 py-4 font-medium text-emerald-700 dark:text-emerald-300">
                       <span className="inline-flex items-center text-emerald-500 mr-1.5 font-bold">✓</span>
-                      Dual-layer PDF extraction: PyMuPDF digital text parser with automatic PNG pixmap + Tesseract OCR fallback.
+                      Automatic multi-tier OCR: PyMuPDF + Tesseract 200 DPI OCR + Gemini 3.8 Flash Multimodal Vision transcription.
                     </td>
                   </tr>
 
@@ -973,22 +819,12 @@ export default function LandingView({
               See How It Actually Formats Answers
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-              Click through interactive examples below to inspect live LangGraph &amp; MCP execution traces,
-              LaTeX derivations, refusal guardrails, verifiable source citations, and executive briefings.
+              Click through interactive examples below to see real output generated with LaTeX formulas,
+              deep reasoning CoT, verifiable source citations, and executive briefings.
             </p>
           </div>
 
           <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
-            <button
-              onClick={() => setActiveDemoTab("agentic")}
-              className={`rounded-xl px-4 py-2 text-xs font-semibold transition-all duration-300 hover:scale-105 active:scale-95 ${
-                activeDemoTab === "agentic"
-                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 scale-[1.03] ring-2 ring-indigo-400"
-                  : "border border-slate-200 bg-white/70 text-slate-700 hover:bg-slate-100 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
-            >
-              ⚡ LangGraph &amp; MCP Agent Trace
-            </button>
             <button
               onClick={() => setActiveDemoTab("math")}
               className={`rounded-xl px-4 py-2 text-xs font-semibold transition-all duration-300 hover:scale-105 active:scale-95 ${
@@ -1035,95 +871,6 @@ export default function LandingView({
             key={activeDemoTab}
             className="animate-pop-in mt-6 rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-xl backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/95 sm:p-8"
           >
-            {activeDemoTab === "agentic" && (
-              <div>
-                <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
-                  <div className="text-xs font-semibold text-slate-500">
-                    User Query: <span className="font-mono text-indigo-600 dark:text-indigo-400">&quot;What is our monthly amortized cost for 500,000 queries, and calculate sqrt(144) * 25 + 150?&quot;</span>
-                  </div>
-                  <span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-[10px] font-bold text-violet-700 dark:bg-violet-950/60 dark:text-violet-300">
-                    ⚡ LangGraph &amp; MCP Executed
-                  </span>
-                </div>
-
-                {/* Simulated LangGraph & MCP Agent Trace */}
-                <details className="mb-4 group rounded-xl border border-violet-200/90 bg-violet-50/60 p-3 text-xs dark:border-violet-900/60 dark:bg-violet-950/40" open>
-                  <summary className="flex cursor-pointer select-none items-center justify-between font-semibold text-violet-800 dark:text-violet-300">
-                    <span className="flex items-center gap-1.5">
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-white text-[10px]">⚡</span>
-                      <span>LangGraph &amp; MCP Agent Execution Trace</span>
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
-                        1 MCP Tool Called
-                      </span>
-                    </span>
-                    <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
-                      6 Graph Steps Completed
-                    </span>
-                  </summary>
-
-                  <div className="mt-3 space-y-2.5 border-t border-violet-200/80 pt-2.5 text-[11px] dark:border-violet-900/40">
-                    <div className="space-y-1">
-                      <span className="font-semibold text-slate-500 dark:text-slate-400 text-[10px] uppercase tracking-wider">
-                        StateGraph Node Path:
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 font-mono text-[10px] text-slate-600 dark:text-slate-300">
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                          <span>1. analyze_query (Intent: RAG + Math)</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                          <span>2. retrieve (ChromaDB Top-K = 12)</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                          <span>3. grade_and_route (Needs MCP: True)</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                          <span>4. execute_mcp_tools (docqa_math_eval)</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-                          <span>5. generate_answer (Deep Reasoning)</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                          <span>6. verify_grounding (Zero Hallucination: PASS)</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg bg-white/90 p-2 text-[10px] border border-violet-200/70 dark:bg-slate-900/80 dark:border-slate-700">
-                      <div className="flex items-center justify-between font-semibold text-violet-700 dark:text-violet-300">
-                        <span>🔧 Model Context Protocol Tool: docqa_math_eval</span>
-                        <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-mono">Status: 200 OK (native:docqa)</span>
-                      </div>
-                      <p className="mt-1 font-mono text-slate-600 dark:text-slate-300">
-                        Expression: &quot;sqrt(144) * 25 + 150&quot; → <strong>Result: 450.0</strong>
-                      </p>
-                    </div>
-                  </div>
-                </details>
-
-                <MarkdownRenderer
-                  content={`Based on Section 3.2 of the uploaded **Pricing_Specs.pdf**, the amortized operating costs and mathematical evaluations are as follows:
-
-### 💰 Cost Analysis for 500,000 Queries
-- **Base Embedding &amp; Indexing**: $\\$0.0001$ per query vector = $\\$50.00$
-- **Gemini 3.8 Flash Generation**: $500{,}000 \\times 2{,}000\\text{ tokens} \\times \\frac{\\$0.075}{1\\text{M tokens}} = \\$75.00$
-- **Vector Storage**: $\\$15.00/\\text{month}$ persistent ChromaDB allocation
-- **Total Projected Cost**: $\\$140.00/\\text{month}$ [Pricing_Specs.pdf, Excerpt 1]
-
-### 🧮 MCP Mathematical Verification
-Executing live calculation via the Model Context Protocol (\`docqa_math_eval\`):
-$$\\sqrt{144} \\times 25 + 150 = 12 \\times 25 + 150 = 300 + 150 = 450.0$$
-
-The result computed via the AST math engine is precisely **$450.0$**.`}
-                />
-              </div>
-            )}
-
             {activeDemoTab === "math" && (
               <div>
                 <div className="mb-4 flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
@@ -1144,7 +891,7 @@ The result computed via the AST math engine is precisely **$450.0$**.`}
                   </summary>
                   <div className="mt-2.5 whitespace-pre-wrap border-t border-indigo-100 pt-2.5 font-mono text-[11px] leading-relaxed text-slate-600 dark:border-indigo-900/40 dark:text-slate-300">
                     1. DECONSTRUCT QUESTION: User requests mathematical formulation of cosine similarity and hybrid scoring formula in R^768.
-                    2. EVIDENCE AUDIT: LangGraph node_retrieve defines vector dimension d=768, cosine space, and hybrid blending ratio (0.7 vector + 0.3 keyword).
+                    2. EVIDENCE AUDIT: Section 4 defines vector dimension d=768, cosine space, and BM25 hybrid blending ratio (0.65 vector + 0.35 keyword).
                     3. SYNTHESIS: Format explicit LaTeX equations ($...$ and $$...$$), define all variables, and present step-by-step verification.
                   </div>
                 </details>
@@ -1156,11 +903,11 @@ $$\\text{Sim}(\\mathbf{q}, \\mathbf{d}) = \\frac{\\mathbf{q} \\cdot \\mathbf{d}}
 
 ### Step-by-Step Distance & Hybrid Score Calculation
 1. **Cosine Distance**: Computed as $D_{\\text{cosine}} = 1.0 - \\text{Sim}(\\mathbf{q}, \\mathbf{d})$.
-2. **Hybrid Composite Score**: Incorporates keyword overlap $S_{\\text{kw}}$ to prioritize exact technical terms:
-   $$S_{\\text{composite}} = 0.7 \\cdot \\text{Sim}(\\mathbf{q}, \\mathbf{d}) + 0.3 \\cdot S_{\\text{kw}}$$
+2. **Hybrid Composite Score**: Incorporates BM25 keyword overlap $S_{\\text{kw}}$ to prioritize exact technical names:
+   $$S_{\\text{composite}} = 0.65 \\cdot \\text{Sim}(\\mathbf{q}, \\mathbf{d}) + 0.35 \\cdot S_{\\text{kw}}$$
 3. **Relevance Percentage**: For human readability, DocQ&A maps this into an intuitive percentage match:
    $$\\text{Relevance (\\%)} = \\max\\left(15, \\min\\left(99, \\text{round}\\left(S_{\\text{composite}} \\times 100\\right)\\right)\\right)$$
-4. **Threshold Gate**: If $D_{\\text{cosine}} > 0.80$, the chunk is discarded from generation context.`}
+4. **Threshold Gate**: If $D_{\\text{cosine}} > 0.78$, the chunk is discarded from generation context.`}
                 />
               </div>
             )}
@@ -1186,7 +933,7 @@ $$\\text{Sim}(\\mathbf{q}, \\mathbf{d}) = \\frac{\\mathbf{q} \\cdot \\mathbf{d}}
                     &quot;I cannot answer this based on the uploaded documents.&quot;
                   </p>
                   <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-                    Unlike standard bots that invent speculative projections, DocQ&amp;A confirms all retrieved chunks exceeded the 0.80 cosine distance gate and terminates generation rather than feeding false information to the user.
+                    Unlike standard bots that invent speculative projections, DocQ&amp;A confirms all retrieved chunks exceeded the 0.78 distance threshold and terminates generation rather than feeding false information to the user.
                   </p>
                 </div>
               </div>

@@ -3,9 +3,9 @@ import "./globals.css";
 import "katex/dist/katex.min.css";
 
 export const metadata: Metadata = {
-  title: "DocQ&A — Agentic RAG powered by LangGraph & MCP",
+  title: "DocQ&A — AI Document Assistant",
   description:
-    "Enterprise-grade Agentic RAG powered by LangGraph and the Model Context Protocol (MCP). Zero hallucinations, deep chain-of-thought verification, and grounded citations.",
+    "Upload PDFs and ask questions answered only from what they say. Powered by Gemini 3.8 Flash with deep thinking mode, neural embeddings, and grounded citations.",
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
