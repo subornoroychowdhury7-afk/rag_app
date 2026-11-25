@@ -446,12 +446,12 @@ export default function Chat({
               </div>
 
               <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl">
-                {hasDocs ? "Vyrex AI — Agentic Knowledge Base" : "Upload documents to begin"}
+                {hasDocs ? "DocQ&A — Agentic Knowledge Base" : "Upload documents to begin"}
               </h2>
 
               <p className="mt-2 max-w-md text-sm text-slate-500 dark:text-slate-400">
                 {hasDocs
-                  ? "Vyrex AI orchestrates multi-step LangGraph StateGraph reasoning and Model Context Protocol (MCP) tools over your documents."
+                  ? "DocQ&A orchestrates multi-step LangGraph StateGraph reasoning and Model Context Protocol (MCP) tools over your documents."
                   : "Drop files in the left sidebar to index them with neural embeddings."}
               </p>
 

@@ -1,7 +1,7 @@
-"""Model Context Protocol (MCP) Manager for Vyrex AI.
+"""Model Context Protocol (MCP) Manager for DocQ&A.
 
 Handles connection to external MCP servers (stdio and SSE) and provides
-built-in native Vyrex MCP tools for real-time web fetching, mathematical
+built-in native DocQ&A MCP tools for real-time web fetching, mathematical
 computations, system state, and RAG knowledge retrieval.
 """
 
@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
-logger = logging.getLogger("vyrex.mcp")
+logger = logging.getLogger("docqa.mcp")
 
 # Safe math operators for AST-based evaluation
 SAFE_OPERATORS = {
@@ -99,7 +99,7 @@ class MCPToolDefinition:
     name: str
     description: str
     input_schema: Dict[str, Any]
-    server: str = "native:vyrex"
+    server: str = "native:docqa"
 
 
 @dataclass
@@ -108,11 +108,11 @@ class MCPToolResult:
     success: bool
     output: str
     error: Optional[str] = None
-    server: str = "native:vyrex"
+    server: str = "native:docqa"
 
 
 class MCPManager:
-    """Manages MCP tools and external server integrations for Vyrex AI."""
+    """Manages MCP tools and external server integrations for DocQ&A."""
 
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or os.path.join(os.path.dirname(__file__), "mcp_servers.json")
@@ -131,14 +131,14 @@ class MCPManager:
             except Exception as e:
                 logger.warning("Failed to load mcp_servers.json: %s", e)
         else:
-            logger.info("No mcp_servers.json found at %s. Using native Vyrex tools.", self.config_path)
+            logger.info("No mcp_servers.json found at %s. Using native DocQ&A tools.", self.config_path)
 
     def _register_native_tools(self) -> None:
-        """Register built-in Vyrex MCP tools that execute directly in-process."""
+        """Register built-in DocQ&A MCP tools that execute directly in-process."""
         # 1. Math calculation tool
         self.register_native_tool(
             MCPToolDefinition(
-                name="vyrex_math_eval",
+                name="docqa_math_eval",
                 description="Safely evaluate mathematical, numerical, or statistical expressions (e.g. '1500 * (1 + 0.08)**5' or 'sqrt(144) + 25 * 3').",
                 input_schema={
                     "type": "object",
@@ -150,7 +150,7 @@ class MCPManager:
                     },
                     "required": ["expression"],
                 },
-                server="native:vyrex",
+                server="native:docqa",
             ),
             self._tool_math_eval,
         )
@@ -158,7 +158,7 @@ class MCPManager:
         # 2. Live Web Fetch tool
         self.register_native_tool(
             MCPToolDefinition(
-                name="vyrex_web_fetch",
+                name="docqa_web_fetch",
                 description="Fetch and extract readable text from a URL or API endpoint for real-time external information.",
                 input_schema={
                     "type": "object",
@@ -175,7 +175,7 @@ class MCPManager:
                     },
                     "required": ["url"],
                 },
-                server="native:vyrex",
+                server="native:docqa",
             ),
             self._tool_web_fetch,
         )
@@ -183,13 +183,13 @@ class MCPManager:
         # 3. Time and Date tool
         self.register_native_tool(
             MCPToolDefinition(
-                name="vyrex_datetime_info",
+                name="docqa_datetime_info",
                 description="Returns current UTC timestamp, day of week, and ISO format date.",
                 input_schema={
                     "type": "object",
                     "properties": {},
                 },
-                server="native:vyrex",
+                server="native:docqa",
             ),
             self._tool_datetime_info,
         )
@@ -197,8 +197,8 @@ class MCPManager:
         # 4. Workspace structure explorer
         self.register_native_tool(
             MCPToolDefinition(
-                name="vyrex_workspace_info",
-                description="Retrieve Vyrex AI workspace metadata, file listing, or backend status.",
+                name="docqa_workspace_info",
+                description="Retrieve DocQ&A workspace metadata, file listing, or backend status.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -209,7 +209,7 @@ class MCPManager:
                         }
                     },
                 },
-                server="native:vyrex",
+                server="native:docqa",
             ),
             self._tool_workspace_info,
         )
@@ -228,7 +228,7 @@ class MCPManager:
         if not url.startswith(("http://", "https://")):
             return "Error: URL must start with http:// or https://"
         try:
-            headers = {"User-Agent": "VyrexAI-MCP/1.0 (+https://vyrex.ai)"}
+            headers = {"User-Agent": "DocQA-MCP/1.0 (+https://github.com/subornoroychowdhury7-afk/rag_app)"}
             async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=headers) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()

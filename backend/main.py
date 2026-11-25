@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from google.api_core import exceptions as gexc
 from pydantic import BaseModel, Field
 
-from langgraph_workflow import VyrexAgentGraph
+from langgraph_workflow import DocQAAgentGraph
 from mcp_manager import MCPManager, mcp_manager
 
 # --------------------------------------------------------------------------- #
@@ -485,7 +485,7 @@ def embed_texts(texts: list[str], task_type: str = "retrieval_document") -> list
 # --------------------------------------------------------------------------- #
 # FastAPI App & Endpoints
 # --------------------------------------------------------------------------- #
-app = FastAPI(title="Vyrex AI Agent API (LangGraph + MCP)")
+app = FastAPI(title="DocQ&A Agent API (LangGraph + MCP)")
 
 ALLOWED_ORIGINS = [
     o.strip()
@@ -517,7 +517,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 def health():
     return {
         "status": "ok",
-        "app": "Vyrex AI",
+        "app": "DocQ&A",
         "gemini_configured": API_KEY_OK,
         "generation_model": GENERATION_MODEL,
         "langgraph_enabled": True,
@@ -650,8 +650,8 @@ def _count_collection_helper(where_filter: Optional[dict] = None) -> int:
     return collection.count()
 
 
-# Initialize the Compiled Vyrex LangGraph Agent
-vyrex_graph = VyrexAgentGraph(
+# Initialize the Compiled DocQ&A LangGraph Agent
+docqa_graph = DocQAAgentGraph(
     embed_fn=embed_text,
     generate_fn=generate_with_gemini,
     query_chroma_fn=_query_chroma_helper,
@@ -663,7 +663,7 @@ vyrex_graph = VyrexAgentGraph(
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """Orchestrate query reasoning through Vyrex LangGraph and MCP tools."""
+    """Orchestrate query reasoning through DocQ&A LangGraph and MCP tools."""
     query = request.query.strip()
     if not query:
         raise HTTPException(400, "Query must not be empty.")
@@ -681,12 +681,12 @@ async def chat(request: ChatRequest):
     }
 
     try:
-        final_state = await vyrex_graph.invoke_async(initial_state)
+        final_state = await docqa_graph.invoke_async(initial_state)
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Vyrex LangGraph agent execution failed")
-        raise to_http_error(exc, "Vyrex Agent Workflow") from exc
+        logger.exception("DocQ&A LangGraph agent execution failed")
+        raise to_http_error(exc, "DocQ&A Agent Workflow") from exc
 
     return {
         "answer": final_state.get("answer", NO_ANSWER),
@@ -724,9 +724,10 @@ async def execute_mcp_tool(req: MCPExecuteRequest):
 
 @app.get("/graph/info")
 def get_graph_info():
-    """Returns the LangGraph architecture and node specifications for Vyrex AI."""
+    """Returns the LangGraph architecture and node specifications for DocQ&A."""
     return {
-        "name": "VyrexAgentGraph",
+        "name": "DocQAAgentGraph",
+        "app": "DocQ&A",
         "framework": "LangGraph",
         "protocol": "Model Context Protocol (MCP)",
         "nodes": [

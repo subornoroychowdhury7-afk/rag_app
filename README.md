@@ -1,4 +1,4 @@
-# Vyrex AI
+# DocQ&A
 
 An advanced Agentic Retrieval-Augmented Generation (RAG) platform powered by **LangGraph** StateGraph workflows and the **Model Context Protocol (MCP)**. Ask complex questions across knowledge bases with verified citations, live tool execution, and zero hallucinations.
 

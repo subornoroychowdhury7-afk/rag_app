@@ -3,7 +3,7 @@ import "./globals.css";
 import "katex/dist/katex.min.css";
 
 export const metadata: Metadata = {
-  title: "Vyrex AI — Agentic RAG powered by LangGraph & MCP",
+  title: "DocQ&A — Agentic RAG powered by LangGraph & MCP",
   description:
     "Enterprise-grade Agentic RAG powered by LangGraph and the Model Context Protocol (MCP). Zero hallucinations, deep chain-of-thought verification, and grounded citations.",
   icons: {

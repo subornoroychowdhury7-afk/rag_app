@@ -1,4 +1,4 @@
-"""LangGraph Agentic Workflow for Vyrex AI.
+"""LangGraph Agentic Workflow for DocQ&A.
 
 Implements an Adaptive, Corrective RAG (CRAG) and Multi-Tool Agentic StateGraph:
 1. Query Analysis & Contextual Rewriting
@@ -19,7 +19,7 @@ from langgraph.graph import END, StateGraph
 
 from mcp_manager import MCPManager, mcp_manager
 
-logger = logging.getLogger("vyrex.graph")
+logger = logging.getLogger("docqa.graph")
 
 NO_ANSWER = "I cannot answer this based on the uploaded documents."
 
@@ -64,8 +64,8 @@ class AgentState(TypedDict):
     available_docs_summary: List[Dict[str, Any]]
 
 
-class VyrexAgentGraph:
-    """Compiled LangGraph Agent for Vyrex AI."""
+class DocQAAgentGraph:
+    """Compiled LangGraph Agent for DocQ&A."""
 
     def __init__(
         self,
@@ -232,7 +232,7 @@ class VyrexAgentGraph:
             if math_expr_match and len(math_expr_match.group(1).strip()) > 2:
                 needs_mcp = True
                 mcp_calls.append({
-                    "name": "vyrex_math_eval",
+                    "name": "docqa_math_eval",
                     "arguments": {"expression": math_expr_match.group(1).strip()},
                 })
 
@@ -241,7 +241,7 @@ class VyrexAgentGraph:
         if url_match:
             needs_mcp = True
             mcp_calls.append({
-                "name": "vyrex_web_fetch",
+                "name": "docqa_web_fetch",
                 "arguments": {"url": url_match.group(0), "max_chars": 4000},
             })
 
@@ -249,7 +249,7 @@ class VyrexAgentGraph:
         if re.search(r"\b(current time|what time is it|today'?s date|current date|utc time)\b", query, re.I):
             needs_mcp = True
             mcp_calls.append({
-                "name": "vyrex_datetime_info",
+                "name": "docqa_datetime_info",
                 "arguments": {},
             })
 
@@ -284,7 +284,7 @@ class VyrexAgentGraph:
                     "tool": tool_name,
                     "success": False,
                     "output": f"Tool execution failed: {e}",
-                    "server": "native:vyrex",
+                    "server": "native:docqa",
                 })
 
         return {
@@ -327,7 +327,7 @@ class VyrexAgentGraph:
 
         context_string = "\n\n".join(context_blocks)
 
-        prompt = f"""You are Vyrex AI Assistant, an elite frontier agentic research intelligence powered by LangGraph and the Model Context Protocol (MCP).
+        prompt = f"""You are DocQ&A Assistant, an elite frontier agentic research intelligence powered by LangGraph and the Model Context Protocol (MCP).
 Your objective is to deliver the highest-intelligence, mathematically rigorous, deeply cited response grounded strictly in the provided context excerpts and live MCP tool results.
 
 CONTEXT EXCERPTS & LIVE MCP TOOL DATA:
@@ -346,7 +346,7 @@ Before writing your final response, execute an internal verification phase enclo
 CORE STANDARDS:
 - High-impact, authoritative answer in the first 1-2 sentences.
 - Elaborate thoroughly with clear Markdown headings (##, ###), bullet points, and data tables where applicable.
-- Inline grounded citations: e.g. `[DocumentName.pdf]` or `[MCP: vyrex_web_fetch]`.
+- Inline grounded citations: e.g. `[DocumentName.pdf]` or `[MCP: docqa_web_fetch]`.
 - All math and formulas formatted in LaTeX: inline $...$ or display $$...$$.
 - If context does not cover the question, state honestly what is missing.
 
@@ -427,7 +427,7 @@ FOLLOW_UPS:
         if doc_items:
             doc_summary = "\n".join(f"- **{d['name']}** ({d['chunks']} indexed passages)" for d in doc_items)
             ans = (
-                f"Hello! I am **Vyrex AI**, an enterprise-grade agentic research assistant powered by **LangGraph** "
+                f"Hello! I am **DocQ&A**, an enterprise-grade agentic research assistant powered by **LangGraph** "
                 f"and the **Model Context Protocol (MCP)**.\n\n"
                 f"### 📚 Active Knowledge Base ({len(doc_items)} documents):\n"
                 f"{doc_summary}\n\n"
@@ -445,13 +445,13 @@ FOLLOW_UPS:
             ]
         else:
             ans = (
-                "Hello! I am **Vyrex AI**, your agentic research assistant powered by **LangGraph** and **MCP**.\n\n"
+                "Hello! I am **DocQ&A**, your agentic research assistant powered by **LangGraph** and **MCP**.\n\n"
                 "Your local knowledge base currently has no documents indexed. "
                 "Upload a PDF, Markdown, or text file via the sidebar to enable full RAG, or ask me mathematical calculations and web queries via MCP tools!"
             )
             sample_followups = [
                 "Calculate: sqrt(144) * 25 + 150",
-                "How do LangGraph and MCP collaborate in Vyrex AI?",
+                "How do LangGraph and MCP collaborate in DocQ&A?",
             ]
 
         return {
@@ -460,7 +460,7 @@ FOLLOW_UPS:
             "citations": [],
             "source_files": [d["name"] for d in doc_items] if doc_items else [],
             "suggested_followups": sample_followups,
-            "model_used": "system:vyrex_agent",
+            "model_used": "system:docqa_agent",
             "is_grounded": True,
             "execution_steps": steps,
         }
@@ -548,9 +548,9 @@ FOLLOW_UPS:
         return workflow.compile()
 
     async def invoke_async(self, initial_state: AgentState) -> Dict[str, Any]:
-        """Asynchronously execute the Vyrex LangGraph state graph."""
+        """Asynchronously execute the DocQ&A LangGraph state graph."""
         return await self.app.ainvoke(initial_state)
 
     def invoke(self, initial_state: AgentState) -> Dict[str, Any]:
-        """Synchronously execute the Vyrex LangGraph state graph."""
+        """Synchronously execute the DocQ&A LangGraph state graph."""
         return self.app.invoke(initial_state)

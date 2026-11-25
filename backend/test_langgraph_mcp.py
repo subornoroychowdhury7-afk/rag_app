@@ -1,4 +1,4 @@
-"""Test suite for Vyrex AI LangGraph and Model Context Protocol (MCP) integrations."""
+"""Test suite for DocQ&A LangGraph and Model Context Protocol (MCP) integrations."""
 
 import unittest
 from fastapi.testclient import TestClient
@@ -13,7 +13,7 @@ class LangGraphMcpTestCase(unittest.TestCase):
         res = self.client.get("/health")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data.get("app"), "Vyrex AI")
+        self.assertEqual(data.get("app"), "DocQ&A")
         self.assertTrue(data.get("langgraph_enabled"))
         self.assertTrue(data.get("mcp_enabled"))
 
@@ -21,7 +21,7 @@ class LangGraphMcpTestCase(unittest.TestCase):
         res = self.client.get("/graph/info")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data.get("name"), "VyrexAgentGraph")
+        self.assertEqual(data.get("name"), "DocQAAgentGraph")
         self.assertEqual(data.get("framework"), "LangGraph")
         self.assertIn("analyze_query", data.get("nodes", []))
         self.assertIn("execute_mcp_tools", data.get("nodes", []))
@@ -33,16 +33,16 @@ class LangGraphMcpTestCase(unittest.TestCase):
         data = res.json()
         self.assertIn("tools", data)
         tool_names = [t["name"] for t in data["tools"]]
-        self.assertIn("vyrex_math_eval", tool_names)
-        self.assertIn("vyrex_web_fetch", tool_names)
-        self.assertIn("vyrex_datetime_info", tool_names)
-        self.assertIn("vyrex_workspace_info", tool_names)
+        self.assertIn("docqa_math_eval", tool_names)
+        self.assertIn("docqa_web_fetch", tool_names)
+        self.assertIn("docqa_datetime_info", tool_names)
+        self.assertIn("docqa_workspace_info", tool_names)
 
     def test_mcp_execute_math(self):
         res = self.client.post(
             "/mcp/execute",
             json={
-                "tool": "vyrex_math_eval",
+                "tool": "docqa_math_eval",
                 "arguments": {"expression": "100 * 2 + sqrt(64)"},
             },
         )
@@ -55,7 +55,7 @@ class LangGraphMcpTestCase(unittest.TestCase):
         res = self.client.post(
             "/mcp/execute",
             json={
-                "tool": "vyrex_datetime_info",
+                "tool": "docqa_datetime_info",
                 "arguments": {},
             },
         )

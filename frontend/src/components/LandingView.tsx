@@ -177,7 +177,7 @@ export default function LandingView({
       failReason:
         "Traditional RAG pipelines are rigid, 1-shot procedural scripts. If a query requires multi-step reasoning, external data, or mathematical calculation, standard RAG fails or answers with guesses.",
       docQASolution:
-        "DocQ&A / Vyrex AI integrates a state-of-the-art LangGraph StateGraph engine with the Model Context Protocol (MCP). Queries flow through dynamic nodes (intent analysis, retrieval, document relevance grading, live MCP tool execution, deep thinking synthesis, and anti-hallucination verification loops).",
+        "DocQ&A integrates a state-of-the-art LangGraph StateGraph engine with the Model Context Protocol (MCP). Queries flow through dynamic nodes (intent analysis, retrieval, document relevance grading, live MCP tool execution, deep thinking synthesis, and anti-hallucination verification loops).",
       codeProof: "Verified in backend/langgraph_workflow.py & backend/mcp_manager.py",
       proofDetails: [
         "Compiled LangGraph StateGraph with conditional routing and self-correction loops",
@@ -255,7 +255,7 @@ export default function LandingView({
             </div>
             <div>
               <span className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-600 via-violet-600 to-indigo-500 bg-clip-text text-transparent dark:from-indigo-400 dark:via-violet-300 dark:to-indigo-300">
-                Vyrex AI
+                DocQ&amp;A
               </span>
               <span className="ml-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-700/10 dark:bg-indigo-950/60 dark:text-indigo-300 dark:ring-indigo-300/20">
                 LangGraph · MCP
@@ -306,7 +306,7 @@ export default function LandingView({
           </h1>
 
           <p className="mx-auto mt-6 max-w-3xl text-base leading-relaxed text-slate-600 dark:text-slate-300 sm:text-lg">
-            Upload PDFs, scanned documents, TXT, or Markdown files. Vyrex AI orchestrates multi-agent RAG via
+            Upload PDFs, scanned documents, TXT, or Markdown files. DocQ&amp;A orchestrates multi-agent RAG via
             LangGraph workflows and live Model Context Protocol (MCP) tools—answering with step-by-step deep thinking,
             mathematical LaTeX proofs, verifiable source citations, and executive briefings.
           </p>
