@@ -11,6 +11,9 @@ interface Message {
   sources?: string[];
   citations?: Citation[];
   suggestedFollowups?: string[];
+  executionSteps?: string[];
+  mcpToolsUsed?: { tool: string; success: boolean; output: string; server?: string }[];
+  pipeline?: string;
   isError?: boolean;
   timestamp: Date;
 }
@@ -377,6 +380,9 @@ export default function Chat({
           sources: res.sources,
           citations: res.citations,
           suggestedFollowups: res.suggested_followups,
+          executionSteps: res.execution_steps,
+          mcpToolsUsed: res.mcp_tools_used,
+          pipeline: res.pipeline,
           timestamp: new Date(),
         },
       ]);
@@ -440,13 +446,13 @@ export default function Chat({
               </div>
 
               <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl">
-                {hasDocs ? "Ask anything about your knowledge base" : "Upload documents to begin"}
+                {hasDocs ? "Vyrex AI — Agentic Knowledge Base" : "Upload documents to begin"}
               </h2>
 
               <p className="mt-2 max-w-md text-sm text-slate-500 dark:text-slate-400">
                 {hasDocs
-                  ? "DocQ&A searches your uploaded PDF, Markdown, and TXT files using vector similarity and provides verified answers."
-                  : "Drop files in the left sidebar to index them with Gemini neural embeddings."}
+                  ? "Vyrex AI orchestrates multi-step LangGraph StateGraph reasoning and Model Context Protocol (MCP) tools over your documents."
+                  : "Drop files in the left sidebar to index them with neural embeddings."}
               </p>
 
               {hasDocs && (
@@ -509,6 +515,65 @@ export default function Chat({
                           : "border-slate-200/90 bg-white text-slate-800 shadow-xs dark:border-slate-700/80 dark:bg-slate-800 dark:text-slate-200"
                         }`}
                     >
+                      {/* LangGraph & MCP Reasoning Trace */}
+                      {((m.executionSteps && m.executionSteps.length > 0) || (m.mcpToolsUsed && m.mcpToolsUsed.length > 0)) && (
+                        <details className="mb-2.5 group rounded-xl border border-violet-200/80 bg-violet-50/50 p-2 text-xs transition-colors dark:border-violet-900/50 dark:bg-violet-950/30">
+                          <summary className="flex cursor-pointer select-none items-center justify-between font-semibold text-violet-700 hover:text-violet-800 dark:text-violet-300 dark:hover:text-violet-200">
+                            <span className="flex items-center gap-1.5">
+                              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-100 text-[10px] dark:bg-violet-900/70">
+                                ⚡
+                              </span>
+                              <span>LangGraph &amp; MCP Agent Trace</span>
+                              {m.mcpToolsUsed && m.mcpToolsUsed.length > 0 && (
+                                <span className="rounded-full bg-amber-100 px-1.5 py-0.2 text-[9px] font-bold text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
+                                  {m.mcpToolsUsed.length} MCP Tool{m.mcpToolsUsed.length > 1 ? "s" : ""}
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500 group-open:hidden">
+                              View {m.executionSteps?.length ?? 0} Steps
+                            </span>
+                          </summary>
+
+                          <div className="mt-2 space-y-2 border-t border-violet-100 pt-2 text-[11px] dark:border-violet-900/40">
+                            {m.executionSteps && m.executionSteps.length > 0 && (
+                              <div className="space-y-1">
+                                <span className="font-semibold text-slate-500 dark:text-slate-400 text-[10px] uppercase tracking-wider">
+                                  Graph State Execution:
+                                </span>
+                                <div className="space-y-0.5">
+                                  {m.executionSteps.map((step, sIdx) => (
+                                    <div key={sIdx} className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-violet-500"></span>
+                                      <span className="font-mono text-[10px]">{step}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {m.mcpToolsUsed && m.mcpToolsUsed.length > 0 && (
+                              <div className="space-y-1 pt-1 border-t border-violet-100/60 dark:border-violet-900/30">
+                                <span className="font-semibold text-slate-500 dark:text-slate-400 text-[10px] uppercase tracking-wider">
+                                  Model Context Protocol (MCP) Invocations:
+                                </span>
+                                {m.mcpToolsUsed.map((tool, tIdx) => (
+                                  <div key={tIdx} className="rounded-md bg-white/80 p-1.5 text-[10px] border border-violet-100 dark:bg-slate-900/60 dark:border-slate-700">
+                                    <div className="flex items-center justify-between font-semibold text-violet-700 dark:text-violet-300">
+                                      <span>🔧 {tool.tool}</span>
+                                      <span className="text-[9px] text-slate-400">{tool.server || "native"}</span>
+                                    </div>
+                                    <p className="mt-0.5 text-slate-600 dark:text-slate-300 whitespace-pre-wrap line-clamp-3">
+                                      {tool.output}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      )}
+
                       {m.thinking && (
                         <details className="mb-3 group rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-2.5 text-xs transition-colors dark:border-indigo-900/50 dark:bg-indigo-950/30">
                           <summary className="flex cursor-pointer select-none items-center gap-1.5 font-semibold text-indigo-700 hover:text-indigo-800 dark:text-indigo-300 dark:hover:text-indigo-200">

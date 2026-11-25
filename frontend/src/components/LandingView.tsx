@@ -165,6 +165,26 @@ export default function LandingView({
         "Generates intelligent follow-up inquiries to probe the document further",
       ],
     },
+    {
+      id: "langgraph_mcp",
+      badge: "Agentic Intelligence",
+      title: "Stateful Agent Graphs & Live MCP Tools",
+      icon: (
+        <svg className="h-6 w-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      ),
+      failReason:
+        "Traditional RAG pipelines are rigid, 1-shot procedural scripts. If a query requires multi-step reasoning, external data, or mathematical calculation, standard RAG fails or answers with guesses.",
+      docQASolution:
+        "DocQ&A / Vyrex AI integrates a state-of-the-art LangGraph StateGraph engine with the Model Context Protocol (MCP). Queries flow through dynamic nodes (intent analysis, retrieval, document relevance grading, live MCP tool execution, deep thinking synthesis, and anti-hallucination verification loops).",
+      codeProof: "Verified in backend/langgraph_workflow.py & backend/mcp_manager.py",
+      proofDetails: [
+        "Compiled LangGraph StateGraph with conditional routing and self-correction loops",
+        "Model Context Protocol (MCP) tool execution (math evaluation, live web fetch, workspace tools)",
+        "Deep reasoning protocol (<thinking>) with inline verifiable citations",
+      ],
+    },
   ];
 
   return (
@@ -235,10 +255,10 @@ export default function LandingView({
             </div>
             <div>
               <span className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-600 via-violet-600 to-indigo-500 bg-clip-text text-transparent dark:from-indigo-400 dark:via-violet-300 dark:to-indigo-300">
-                DocQ&amp;A
+                Vyrex AI
               </span>
               <span className="ml-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-700/10 dark:bg-indigo-950/60 dark:text-indigo-300 dark:ring-indigo-300/20">
-                Neural RAG
+                LangGraph · MCP
               </span>
             </div>
           </div>
@@ -275,7 +295,7 @@ export default function LandingView({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
             </span>
-            <span>Gemini 3.8 Flash • Deep Thinking Mode • Hybrid Dense + Lexical Search</span>
+            <span>LangGraph StateGraph • Model Context Protocol (MCP) • Gemini 3.8 Flash</span>
           </div>
 
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-slate-900 dark:text-white">
@@ -286,8 +306,8 @@ export default function LandingView({
           </h1>
 
           <p className="mx-auto mt-6 max-w-3xl text-base leading-relaxed text-slate-600 dark:text-slate-300 sm:text-lg">
-            Upload PDFs, scanned documents, TXT, or Markdown files. DocQ&amp;A searches your documents with
-            768-dim dense vector embeddings and BM25 hybrid ranking, answering with step-by-step deep thinking,
+            Upload PDFs, scanned documents, TXT, or Markdown files. Vyrex AI orchestrates multi-agent RAG via
+            LangGraph workflows and live Model Context Protocol (MCP) tools—answering with step-by-step deep thinking,
             mathematical LaTeX proofs, verifiable source citations, and executive briefings.
           </p>
 

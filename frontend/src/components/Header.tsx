@@ -105,9 +105,14 @@ export default function Header({
               </g>
             </svg>
           </span>
-          <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-indigo-500 to-violet-600 bg-clip-text text-transparent">
-            DocQ&amp;A
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-indigo-500 to-violet-600 bg-clip-text text-transparent">
+              Vyrex AI
+            </span>
+            <span className="hidden sm:inline-flex items-center rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-700/10 dark:bg-indigo-950/60 dark:text-indigo-300 dark:ring-indigo-300/20">
+              LangGraph · MCP
+            </span>
+          </div>
         </button>
       </div>
 

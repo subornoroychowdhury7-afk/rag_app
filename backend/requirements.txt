@@ -11,3 +11,7 @@ python-dotenv
 httpx
 pytest
 pytest-anyio
+langgraph>=1.0.0
+langchain-core>=1.0.0
+mcp>=1.0.0
+

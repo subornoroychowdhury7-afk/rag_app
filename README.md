@@ -1,6 +1,6 @@
-# DocQ&A
+# Vyrex AI
 
-A Retrieval-Augmented Generation (RAG) application that lets you ask natural-language questions against uploaded documents and receive cited, grounded answers. There is no login or account required.
+An advanced Agentic Retrieval-Augmented Generation (RAG) platform powered by **LangGraph** StateGraph workflows and the **Model Context Protocol (MCP)**. Ask complex questions across knowledge bases with verified citations, live tool execution, and zero hallucinations.
 
 **Live deployments**
 
@@ -16,35 +16,53 @@ A Retrieval-Augmented Generation (RAG) application that lets you ask natural-lan
 
 ## Features
 
-- Upload PDF, plain text, or Markdown files (up to 20 MB per file)
-- PDF text extraction via PyMuPDF; scanned pages OCR'd with Tesseract or, when Tesseract is unavailable, with Gemini's native PDF transcription
-- Multi-turn conversational Q&A with chat history
-- Every answer includes source citations with chunk text and a cosine-similarity relevance score
-- Optional document filter to scope a conversation to a single file
-- One-click AI executive summary for any indexed document
-- Document management: list, inspect chunk counts, delete
-- Light and dark theme
+- **LangGraph Agentic StateGraph**: Orchestrates multi-step query contextualization, hybrid vector/lexical retrieval, document relevance grading, tool execution, and anti-hallucination reflection.
+- **Model Context Protocol (MCP)**: Native in-process tool execution (math evaluation, real-time web fetching, workspace inspection, datetime) plus extensible external server support via `mcp_servers.json`.
+- **Upload & Extraction**: Ingest PDF, plain text, or Markdown files (up to 20 MB per file) with PyMuPDF and fallback OCR (Tesseract / Gemini multimodal vision).
+- **Multi-Turn Chat with Reasoning**: Real-time chain-of-thought thinking logs (`<thinking>`), suggested follow-up questions, and inline citations `[DocName.pdf]`.
+- **Zero Hallucination Guard**: Mathematical cosine cutoff (0.78) with hybrid BM25 boost and self-correction verification loop.
+- **Executive Summaries**: One-click structured AI briefings with critical highlights and strategic recommendations.
+- **Modern Responsive UI**: Next.js 16 App Router, React 19, Tailwind CSS v4, KaTeX math typesetting, and dark mode.
 
 ---
 
-## RAG Pipeline
+## Agentic Architecture (LangGraph & MCP)
 
 ```
-Upload → extract text → chunk with overlap → embed (Gemini) → ChromaDB
-
-Query  → embed query → cosine similarity search → distance filter → Gemini generation → cited answer
+                       User Query
+                           │
+                           ▼
+               [1. analyze_query]
+              (Intent & Rewriting)
+                    │             │
+      (No docs/Greeting)   (Search Required)
+                    │             │
+                    ▼             ▼
+       [conversational]     [2. retrieve]
+        (Safe Greeting)   (Hybrid ChromaDB)
+              │                   │
+              │                   ▼
+              │          [3. grade_and_route]
+              │         (Relevance & Needs MCP?)
+              │           │               │
+              │      (Needs MCP)     (Docs Sufficient)
+              │           │               │
+              │           ▼               │
+              │   [4. execute_mcp_tools]  │
+              │     (Live Tools & Math)   │
+              │           │               │
+              │           └───────┬───────┘
+              │                   │
+              │                   ▼
+              │         [5. generate_answer]
+              │       (Deep Reasoning Protocol)
+              │                   │
+              │                   ▼
+              │        [6. verify_grounding]
+              │       (Anti-Hallucination Loop)
+              │                   │
+              └───────────────────┴──────────► [END]
 ```
-
-**Defaults (configurable via environment variables):**
-
-- Chunk size: **1,800 characters**
-- Chunk overlap: **300 characters**
-- Embedding model: `models/gemini-embedding-2` (768 dimensions)
-- Generation model: `gemini-3.8-flash`
-- Cosine distance cutoff: **0.75** (chunks with distance > 0.75 are discarded; lower distance = higher similarity)
-- Top-K retrieval: 10 chunks per query
-
-If no chunk passes the distance cutoff, the API returns a fixed fallback message rather than generating an unsupported answer.
 
 ---
 
@@ -52,17 +70,14 @@ If no chunk passes the distance cutoff, the API returns a fixed fallback message
 
 | Layer | Technology | Role |
 |---|---|---|
-| Backend API | FastAPI (Python 3.12) | REST endpoints, request validation, CORS |
-| Vector store | ChromaDB | Persistent local store (HNSW/cosine) or Chroma Cloud |
-| Embeddings & generation | Google Gemini (`google-generativeai`) | `gemini-embedding-2` for vectors, `gemini-3.8-flash` for answers and summaries |
-| PDF processing | PyMuPDF, pytesseract, Pillow | Text extraction and per-page OCR |
-| Frontend | Next.js 16 + React 19 + TypeScript | App Router SPA |
-| Styling | Tailwind CSS v4 | Utility-first styling |
-| Math rendering | remark-math + rehype-katex | LaTeX in answers |
-| Container | Docker (`python:3.12-slim` + Tesseract) | Production image published to GHCR |
-| Backend hosting | Render (free tier, Docker runtime) | Defined in `render.yaml` |
-| Frontend hosting | Vercel and GitHub Pages | Static export for Pages, full SSR on Vercel |
-| CI/CD | GitHub Actions (`deploy.yml`) | Deploy on push to `main` |
+| Agent Orchestration | **LangGraph** (`langgraph`) | StateGraph cyclic workflow, node routing, self-correction |
+| Tool Protocol | **Model Context Protocol** (`mcp`) | MCP client session, native tools & external tool server bridge |
+| Backend API | FastAPI (Python 3.12+) | Async REST endpoints, MCP execution, request validation |
+| Vector Store | ChromaDB | Persistent local HNSW vector database |
+| Embeddings & Generation | Google Gemini (`gemini-embedding-2`, `gemini-3.8-flash`) | 768-dim embeddings and grounded reasoning generation |
+| PDF Processing | PyMuPDF, pytesseract, Pillow | Native digital text parsing with OCR vision fallback |
+| Frontend | Next.js 16 + React 19 + TypeScript | High-performance SPA with agent trace & MCP visualizer |
+| Styling & Typography | Tailwind CSS v4 + KaTeX | Fast utility styling with LaTeX mathematical equations |
 
 ---
 
@@ -138,10 +153,13 @@ Open `http://localhost:3000`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Health check; returns `gemini_configured` flag |
+| `GET` | `/health` | Health check; returns status, app name, and LangGraph/MCP flags |
+| `GET` | `/graph/info` | Returns LangGraph architecture, node sequence, and feature list |
+| `GET` | `/mcp/tools` | Discovers and lists all registered Model Context Protocol (MCP) tools |
+| `POST` | `/mcp/execute` | Directly executes a specified MCP tool with JSON arguments |
 | `GET` | `/documents` | List indexed documents with chunk counts |
 | `POST` | `/upload` | Ingest a PDF, TXT, or Markdown file |
-| `POST` | `/chat` | Embed query, retrieve chunks, generate cited answer |
+| `POST` | `/chat` | Executes LangGraph Adaptive RAG agentic workflow with cited answer |
 | `POST` | `/documents/{filename}/summarize` | Generate an executive AI briefing |
 | `DELETE` | `/documents/{filename}` | Remove a document and all its chunks |
 
