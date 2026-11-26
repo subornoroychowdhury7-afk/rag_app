@@ -178,14 +178,20 @@ function formatTime(date: Date): string {
 
 const MAX_CHARS = 10000;
 
+interface SpeechRecognitionResult {
+  isFinal: boolean;
+  [index: number]: { transcript: string };
+  length: number;
+}
+
+interface SpeechRecognitionResultList {
+  [index: number]: SpeechRecognitionResult;
+  length: number;
+}
+
 interface SpeechRecognitionEventLike {
-  results?: {
-    [index: number]: {
-      [index: number]: {
-        transcript?: string;
-      };
-    };
-  };
+  results?: SpeechRecognitionResultList;
+  resultIndex?: number;
 }
 
 interface SpeechRecognitionInstanceLike {
@@ -193,11 +199,49 @@ interface SpeechRecognitionInstanceLike {
   interimResults: boolean;
   lang: string;
   onstart: () => void;
-  onresult: (event: SpeechRecognitionEventLike) => void;
-  onerror: (event: { error?: string }) => void;
-  onend: () => void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
   start: () => void;
   stop: () => void;
+}
+
+/**
+ * Rebuild the full dictation transcript from a SpeechRecognitionResultList.
+ *
+ * Rebuilding from index 0 (instead of appending deltas) prevents interim
+ * hypothesis updates from stacking, and collapsing prefix/identical segments
+ * guards against mobile Chromium bugs that emit cumulative result entries.
+ */
+function mergeSpeechResults(results: SpeechRecognitionResultList): string {
+  const segments: string[] = [];
+
+  for (let i = 0; i < results.length; i++) {
+    const raw = results[i]?.[0]?.transcript?.trim() ?? "";
+    if (!raw) continue;
+
+    const prev = segments[segments.length - 1];
+    if (!prev) {
+      segments.push(raw);
+      continue;
+    }
+
+    const rawLower = raw.toLowerCase();
+    const prevLower = prev.toLowerCase();
+
+    if (rawLower === prevLower || rawLower.startsWith(prevLower)) {
+      segments[segments.length - 1] = raw;
+      continue;
+    }
+
+    if (prevLower.startsWith(rawLower)) {
+      continue;
+    }
+
+    segments.push(raw);
+  }
+
+  return segments.join(" ");
 }
 
 export default function Chat({
@@ -219,6 +263,9 @@ export default function Chat({
   const recognitionRef = useRef<SpeechRecognitionInstanceLike | null>(null);
   const requestAbortRef = useRef<AbortController | null>(null);
   const hydratedRef = useRef(false);
+  // Stores whatever the user had typed BEFORE starting a voice session so we
+  // can prepend it to the live voice transcript without stacking duplicates.
+  const voicePrefixRef = useRef<string>("");
 
   const STORAGE_KEY = "docqa_chat_history_v1";
 
@@ -262,9 +309,23 @@ export default function Chat({
     }
   }, [messages]);
 
+  function cancelRecognition() {
+    const rec = recognitionRef.current;
+    if (rec) {
+      rec.onresult = null;
+      rec.onend = null;
+      rec.onerror = null;
+      rec.stop();
+      recognitionRef.current = null;
+    }
+    voicePrefixRef.current = "";
+    setIsListening(false);
+  }
+
   useEffect(() => {
     return () => {
       requestAbortRef.current?.abort();
+      cancelRecognition();
     };
   }, []);
 
@@ -285,12 +346,15 @@ export default function Chat({
   /* ---- Voice Dictation (Speech to Text) ---- */
   function toggleListening() {
     if (isListening) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+      // Stop gracefully so any buffered final result still flushes before onend clears the prefix.
+      recognitionRef.current?.stop();
       setIsListening(false);
       return;
     }
+
+    // Snapshot whatever the user typed before hitting the mic button so we can
+    // prepend it to the live transcript without double-appending it later.
+    voicePrefixRef.current = input.trim();
 
     const win = typeof window !== "undefined"
       ? (window as unknown as {
@@ -308,8 +372,10 @@ export default function Chat({
 
     try {
       const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
+      // continuous = true keeps mic open across natural pauses;
+      // interimResults = true lets us replace the box cleanly as words resolve.
+      recognition.continuous = true;
+      recognition.interimResults = true;
       recognition.lang = navigator.language || "en-US";
 
       recognition.onstart = () => {
@@ -317,18 +383,25 @@ export default function Chat({
       };
 
       recognition.onresult = (event: SpeechRecognitionEventLike) => {
-        const transcript = event.results?.[0]?.[0]?.transcript;
-        if (transcript) {
-          setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
-        }
+        if (!event.results) return;
+
+        const transcript = mergeSpeechResults(event.results);
+        if (!transcript) return;
+
+        const prefix = voicePrefixRef.current;
+        setInput(prefix ? `${prefix} ${transcript}` : transcript);
       };
 
       recognition.onerror = (event: { error?: string }) => {
         console.warn("Speech recognition error:", event.error);
+        voicePrefixRef.current = "";
+        recognitionRef.current = null;
         setIsListening(false);
       };
 
       recognition.onend = () => {
+        voicePrefixRef.current = "";
+        recognitionRef.current = null;
         setIsListening(false);
       };
 
@@ -336,6 +409,8 @@ export default function Chat({
       recognition.start();
     } catch (err) {
       console.error("Could not start speech recognition:", err);
+      voicePrefixRef.current = "";
+      recognitionRef.current = null;
       setIsListening(false);
     }
   }
@@ -408,6 +483,8 @@ export default function Chat({
   async function submitQuery(queryText?: string) {
     const query = (queryText !== undefined ? queryText : input).trim();
     if (!query || loading) return;
+
+    cancelRecognition();
 
     setNotice(null);
     setInput("");
