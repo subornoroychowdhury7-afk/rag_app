@@ -211,11 +211,62 @@ export default function Chat({
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [answerMode, setAnswerMode] = useState<"detailed" | "concise" | "academic" | "step_by_step">("detailed");
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<SpeechRecognitionInstanceLike | null>(null);
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const hydratedRef = useRef(false);
+
+  const STORAGE_KEY = "docqa_chat_history_v1";
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<Omit<Message, "timestamp"> & { timestamp: string }>;
+        if (Array.isArray(parsed)) {
+          queueMicrotask(() => {
+            setMessages(
+              parsed.map((item) => ({
+                ...item,
+                timestamp: item.timestamp ? new Date(item.timestamp) : new Date(),
+              }))
+            );
+            hydratedRef.current = true;
+          });
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load saved chat history:", err);
+    }
+    hydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    try {
+      if (messages.length === 0) {
+        localStorage.removeItem(STORAGE_KEY);
+      } else {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(messages.slice(-60).map((m) => ({ ...m, timestamp: m.timestamp.toISOString() })))
+        );
+      }
+    } catch (err) {
+      console.warn("Failed to persist chat history:", err);
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      requestAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -251,7 +302,7 @@ export default function Chat({
     const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.");
+      setNotice("Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.");
       return;
     }
 
@@ -292,7 +343,7 @@ export default function Chat({
   /* ---- Read Aloud (Text to Speech) ---- */
   function toggleSpeak(idx: number, text: string) {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      alert("Text-to-speech is not supported in this browser.");
+      setNotice("Text-to-speech is not supported in this browser.");
       return;
     }
 
@@ -358,16 +409,20 @@ export default function Chat({
     const query = (queryText !== undefined ? queryText : input).trim();
     if (!query || loading) return;
 
+    setNotice(null);
     setInput("");
     setMessages((m) => [...m, { role: "user", content: query, timestamp: new Date() }]);
     setLoading(true);
+
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
 
     try {
       const history = messages
         .filter((m) => !m.isError)
         .map((m) => ({ role: m.role, content: m.content.slice(0, 32000) }));
 
-      const res = await sendChat(query, history, selectedDocFilter, answerMode);
+      const res = await sendChat(query, history, selectedDocFilter, answerMode, controller.signal);
       setMessages((m) => [
         ...m,
         {
@@ -381,9 +436,16 @@ export default function Chat({
         },
       ]);
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        setNotice("Response generation cancelled.");
+        return;
+      }
       const content = err instanceof Error ? err.message : "Something went wrong.";
       setMessages((m) => [...m, { role: "assistant", content, isError: true, timestamp: new Date() }]);
     } finally {
+      if (requestAbortRef.current === controller) {
+        requestAbortRef.current = null;
+      }
       setLoading(false);
     }
   }
@@ -615,6 +677,24 @@ export default function Chat({
       {/* Input Dock */}
       <div className="border-t border-slate-200/80 bg-white/90 px-4 py-3 backdrop-blur-md dark:border-slate-700/80 dark:bg-slate-900/90 md:px-10">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
+          {/* Inline Status / Speech Notice */}
+          {notice && (
+            <div
+              role="status"
+              className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50/90 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300"
+            >
+              <span>{notice}</span>
+              <button
+                type="button"
+                onClick={() => setNotice(null)}
+                className="ml-3 font-semibold hover:opacity-75"
+                aria-label="Dismiss notice"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Active Document Filter Badge */}
           {selectedDocFilter && (
             <div className="flex items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/80 px-3 py-1.5 text-xs text-indigo-800 dark:border-indigo-900/60 dark:bg-indigo-950/50 dark:text-indigo-300">
@@ -730,21 +810,31 @@ export default function Chat({
               </svg>
             </button>
 
-            {/* Send Button */}
-            <button
-              onClick={() => submitQuery()}
-              disabled={loading || !input.trim() || !hasDocs}
-              className="flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 px-5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
-                />
-              </svg>
-              <span>Send</span>
-            </button>
+            {/* Send / Stop Button */}
+            {loading ? (
+              <button
+                type="button"
+                onClick={() => requestAbortRef.current?.abort()}
+                className="flex h-11 items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-5 text-sm font-medium text-rose-700 shadow-sm transition-all hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-300 dark:hover:bg-rose-950"
+              >
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => submitQuery()}
+                disabled={!input.trim() || !hasDocs}
+                className="flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 px-5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
+                  />
+                </svg>
+                <span>Send</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 dark:text-slate-500">

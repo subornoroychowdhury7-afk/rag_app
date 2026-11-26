@@ -30,33 +30,34 @@ export default function SummaryModal({
       return;
     }
 
-    let isMounted = true;
+    const controller = new AbortController();
     queueMicrotask(() => {
-      if (isMounted) {
+      if (!controller.signal.aborted) {
         setLoading(true);
         setError(null);
       }
     });
 
-    summarizeDocument(filename)
+    summarizeDocument(filename, controller.signal)
       .then((res) => {
-        if (isMounted) {
+        if (!controller.signal.aborted) {
           setSummaryData(res);
         }
       })
       .catch((err) => {
-        if (isMounted) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        if (!controller.signal.aborted) {
           setError(
             err instanceof Error ? err.message : "Failed to generate document summary."
           );
         }
       })
       .finally(() => {
-        if (isMounted) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [filename]);
 
@@ -184,6 +185,11 @@ export default function SummaryModal({
 
           {!loading && !error && summaryData && (
             <div className="space-y-4">
+              {summaryData.truncated && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                  Large document: briefing synthesized from the first 40,000 extracted characters.
+                </div>
+              )}
               <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4 dark:border-slate-800/80 dark:bg-slate-800/40">
                 <MarkdownRenderer content={summaryData.summary} />
               </div>

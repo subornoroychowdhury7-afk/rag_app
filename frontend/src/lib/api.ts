@@ -2,6 +2,9 @@ export const API_URL = (
   process.env.NEXT_PUBLIC_API_URL ?? "https://rag-app-1-rqg6.onrender.com"
 ).replace(/\/+$/, "");
 
+const DEFAULT_TIMEOUT_MS = 30_000;
+const HEAVY_OPERATION_TIMEOUT_MS = 120_000;
+
 /* ---------- Types ------------------------------------------------- */
 
 export interface UploadResult {
@@ -24,18 +27,27 @@ export interface ChatResult {
   source_files?: string[];
   citations?: Citation[];
   suggested_followups?: string[];
+  model_used?: string;
 }
 
 export interface DocumentSummaryResult {
   filename: string;
   summary: string;
   total_chunks: number;
+  truncated?: boolean;
 }
 
 export interface DeleteResult {
   message: string;
   filename: string;
   chunks_deleted: number;
+}
+
+export interface HealthResult {
+  status: string;
+  gemini_configured: boolean;
+  vector_store_ready: boolean;
+  generation_model: string;
 }
 
 export interface ChatMessage {
@@ -65,16 +77,55 @@ function errorDetail(body: unknown, fallback: string): string {
   return fallback;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+interface RequestOptions extends RequestInit {
+  timeoutMs?: number;
+}
+
+async function request<T>(path: string, init: RequestOptions = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...fetchInit } = init;
+  const headers = new Headers(fetchInit.headers);
+
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      throw new DOMException("Request cancelled", "AbortError");
+    }
+    externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
 
   let res: Response;
   try {
-    res = await fetch(`${API_URL}${path}`, { ...init, headers });
-  } catch {
+    res = await fetch(`${API_URL}${path}`, {
+      ...fetchInit,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (externalSignal?.aborted) {
+      throw err instanceof Error ? err : new DOMException("Request cancelled", "AbortError");
+    }
+    if (timedOut) {
+      throw new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. If the Render backend is waking up, please retry in a moment.`
+      );
+    }
     throw new Error(
-      `Can't reach the server at ${API_URL}. If it's hosted on Render it may be waking up - wait a moment and try again.`,
+      `Can't reach the server at ${API_URL}. If it's hosted on Render it may be waking up - wait a moment and try again.`
     );
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
   }
 
   if (!res.ok) {
@@ -89,27 +140,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function jsonPost(body: unknown): RequestInit {
+function jsonPost(body: unknown, signal?: AbortSignal): RequestOptions {
   return {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    timeoutMs: HEAVY_OPERATION_TIMEOUT_MS,
+    signal,
   };
 }
 
-/* ---------- Documents & chat -------------------------------------- */
+/* ---------- Documents, chat & health ------------------------------ */
 
-export function uploadFile(file: File): Promise<UploadResult> {
+export function getHealth(signal?: AbortSignal): Promise<HealthResult> {
+  return request<HealthResult>("/health", { method: "GET", signal, timeoutMs: 15_000 });
+}
+
+export function uploadFile(file: File, signal?: AbortSignal): Promise<UploadResult> {
   const form = new FormData();
   form.append("file", file);
-  return request<UploadResult>("/upload", { method: "POST", body: form });
+  return request<UploadResult>("/upload", {
+    method: "POST",
+    body: form,
+    timeoutMs: HEAVY_OPERATION_TIMEOUT_MS,
+    signal,
+  });
 }
 
 export function sendChat(
   query: string,
   history: ChatMessage[] = [],
   docFilter?: string | null,
-  mode: "detailed" | "concise" | "academic" | "step_by_step" = "detailed"
+  mode: "detailed" | "concise" | "academic" | "step_by_step" = "detailed",
+  signal?: AbortSignal
 ): Promise<ChatResult> {
   const payload: { query: string; history: ChatMessage[]; doc_filter?: string; mode?: string } = {
     query,
@@ -119,14 +182,19 @@ export function sendChat(
   if (docFilter && docFilter.trim()) {
     payload.doc_filter = docFilter.trim();
   }
-  return request<ChatResult>("/chat", jsonPost(payload));
+  return request<ChatResult>("/chat", jsonPost(payload, signal));
 }
 
-export function summarizeDocument(filename: string): Promise<DocumentSummaryResult> {
+export function summarizeDocument(
+  filename: string,
+  signal?: AbortSignal
+): Promise<DocumentSummaryResult> {
   return request<DocumentSummaryResult>(
     `/documents/${encodeURIComponent(filename)}/summarize`,
     {
       method: "POST",
+      timeoutMs: HEAVY_OPERATION_TIMEOUT_MS,
+      signal,
     }
   );
 }
@@ -137,8 +205,9 @@ export function deleteDocument(filename: string): Promise<DeleteResult> {
   });
 }
 
-export function getDocuments(): Promise<{ name: string; chunks: number }[]> {
+export function getDocuments(signal?: AbortSignal): Promise<{ name: string; chunks: number }[]> {
   return request<{ name: string; chunks: number }[]>("/documents", {
     method: "GET",
+    signal,
   });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import LandingView from "@/components/LandingView";
@@ -16,22 +16,21 @@ export default function Home() {
   const [summaryDocFilename, setSummaryDocFilename] = useState<string | null>(null);
   const [view, setView] = useState<"landing" | "app">("landing");
 
-  const pageFileInputRef = useRef<HTMLInputElement>(null);
-
   /* ---- Load documents on mount ---- */
   useEffect(() => {
-    let cancelled = false;
-    getDocuments()
+    const controller = new AbortController();
+    getDocuments(controller.signal)
       .then((list) => {
-        if (!cancelled && Array.isArray(list)) {
+        if (Array.isArray(list)) {
           setDocs(list);
         }
       })
       .catch((err) => {
+        if (err instanceof Error && err.name === "AbortError") return;
         console.error("Failed to fetch documents:", err);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -94,20 +93,6 @@ export default function Home() {
         currentView={view}
         onToggleView={() => setView((v) => (v === "landing" ? "app" : "landing"))}
         docsCount={docs.length}
-      />
-
-      {/* Hidden file input for header/landing quick upload triggers */}
-      <input
-        ref={pageFileInputRef}
-        type="file"
-        accept=".pdf,.txt,.md,.markdown,text/plain,text/markdown,application/pdf"
-        className="sr-only"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            handleLandingUpload(file).catch(console.error);
-          }
-        }}
       />
 
       {view === "landing" ? (

@@ -57,7 +57,7 @@ export default function LandingView({
         "Standard online chatbots (generic PDF bots, ChatGPT wrappers) invent plausible-sounding answers, fictitious statistics, or fabricated contract clauses when information does not exist in your file.",
       docQASolution:
         "DocQ&A enforces a mathematical cosine distance cutoff (MAX_DISTANCE = 0.78 with hybrid keyword adjustment). If no retrieved chunk passes this threshold, the API strictly returns the honest refusal: 'I cannot answer this based on the uploaded documents.' The system prompt strictly prohibits outside knowledge.",
-      codeProof: "Verified in backend/main.py (lines 65-74, 103-120, 708-726)",
+      codeProof: "Verified in backend/app/config.py (MAX_DISTANCE = 0.78) & backend/app/services/rag_service.py (RAGService)",
       proofDetails: [
         "MAX_DISTANCE = 0.78 strict cosine distance cutoff with hybrid keyword boost",
         "Zero-hallucination fallback: fixed string returned if no chunks pass",
@@ -77,12 +77,12 @@ export default function LandingView({
       failReason:
         "Almost all web-based PDF chatbots extract only embedded digital font glyphs. Scanned agreements, archived research papers, receipts, or photocopies extract 0 bytes of text and fail silently or throw 'corrupted file' errors.",
       docQASolution:
-        "DocQ&A runs a dual-layer extraction engine. PyMuPDF extracts native digital text; if any page has no selectable text, it is rendered at 200 DPI into high-resolution images and run through Tesseract OCR. If Tesseract is unavailable on the host, it automatically delegates to Gemini 3.8 Flash's native multimodal PDF vision transcription.",
-      codeProof: "Verified in backend/main.py (lines 192-360: extract_pdf_text & ocr_pdf_with_gemini)",
+        "DocQ&A runs a dual-layer extraction engine with signature validation: validate_upload_bytes checks %PDF- headers, PyMuPDF extracts native selectable digital text per page, and if under 50 characters are extracted, pages are rendered to PNG pixmaps and processed through Tesseract OCR.",
+      codeProof: "Verified in backend/app/services/document_processor.py (validate_upload_bytes & extract_pdf_text)",
       proofDetails: [
-        "PyMuPDF per-page selectable text analysis",
-        "Automatic fallback to 200 DPI pixmap rendering + Tesseract OCR",
-        "Zero-failure fallback to Gemini multimodal base64 PDF vision transcription",
+        "Magic-byte %PDF- signature and UTF-8 validation prior to ingestion",
+        "PyMuPDF per-page selectable text extraction",
+        "Automatic fallback (< 50 chars) to pixmap rendering + Tesseract OCR",
       ],
     },
     {
@@ -98,7 +98,7 @@ export default function LandingView({
         "Generic PDF software breaks complex scientific, financial, or engineering notation into garbled ASCII mush (superscripts, subscripts, integral signs, and matrices get mangled or stripped completely).",
       docQASolution:
         "DocQ&A's prompt requires Gemini to write all mathematical reasoning, steps, and formulas in standard LaTeX ($...$ and $$...$$). The frontend renders every equation dynamically using KaTeX with horizontal scroll protection for wide equations.",
-      codeProof: "Verified in backend/main.py (lines 103-130) & frontend MarkdownRenderer.tsx (lines 43-65)",
+      codeProof: "Verified in backend/app/services/rag_service.py (PROMPT_TEMPLATE) & frontend MarkdownRenderer.tsx",
       proofDetails: [
         "Backend prompt mandates LaTeX formatting ($...$ and $$...$$) & step-by-step working",
         "Frontend remark-math + rehype-katex rendering engine",
@@ -118,7 +118,7 @@ export default function LandingView({
         "Existing software displays vague footnotes like '[1]' with no way to see what snippet was actually retrieved from the document, hiding potential model hallucinations.",
       docQASolution:
         "Every DocQ&A response includes collapsible source cards disclosing the exact chunk verbatim text, source filename, chunk index, a 1-click copy quote button, and a calculated hybrid relevance match score combining dense vector similarity and keyword scoring.",
-      codeProof: "Verified in backend/main.py (lines 696-725) & frontend Chat.tsx (lines 80-145)",
+      codeProof: "Verified in backend/app/services/rag_service.py (answer_question) & frontend Chat.tsx",
       proofDetails: [
         "Hybrid similarity match score calculated directly from vector distance + BM25 keyword overlap",
         "Exact chunk index and filename provenance attached to every message",
@@ -137,8 +137,8 @@ export default function LandingView({
       failReason:
         "When users upload multiple files (e.g., 'Q1_Report.pdf' and 'Q2_Report.pdf'), generic tools combine all documents into one bag of words, mixing numbers and facts across different documents without scoping.",
       docQASolution:
-        "DocQ&A features an active document filter. When selected, the backend restricts ChromaDB cosine vector search strictly using where={'source': filename}, mathematically isolating queries to a single document index.",
-      codeProof: "Verified in backend/main.py (lines 685-695) & frontend Sidebar.tsx (lines 220-250)",
+        "DocQ&A features an active document filter. When selected, ChromaVectorStore restricts ChromaDB cosine vector search strictly using where={'source': filename}, mathematically isolating queries to a single document index.",
+      codeProof: "Verified in backend/app/services/vector_store.py (query) & frontend Sidebar.tsx",
       proofDetails: [
         "ChromaDB metadata-level filtering via where={'source': filename}",
         "Per-document chunk counting, inspection, and one-click deletion",
@@ -157,8 +157,8 @@ export default function LandingView({
       failReason:
         "Reading a 50+ page legal brief, financial audit, or technical spec to locate strategic findings takes hours. Typical chatbots provide brief, superficial summaries that overlook critical numbers.",
       docQASolution:
-        "DocQ&A features a specialized AI Executive Briefing endpoint (/documents/{filename}/summarize). It aggregates the document's sequential chunks and runs a dedicated 4-section executive prompt: Executive Overview, Key Highlights & Critical Data, Strategic Takeaways & Risks, and Recommended Inquiries.",
-      codeProof: "Verified in backend/main.py (lines 841-890) & frontend SummaryModal.tsx",
+        "DocQ&A features a specialized AI Executive Briefing endpoint (/documents/{filename}/summarize). It aggregates ordered chunks and runs a dedicated 4-section executive prompt: Executive Overview, Key Highlights & Critical Data, Strategic Takeaways & Risks, and Recommended Inquiries.",
+      codeProof: "Verified in backend/app/services/rag_service.py (summarize_document) & frontend SummaryModal.tsx",
       proofDetails: [
         "Dedicated executive synthesis prompt with 4 standardized sections",
         "Includes actionable strategic recommendations and risk vectors",
