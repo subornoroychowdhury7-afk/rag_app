@@ -17,25 +17,44 @@ class ChromaVectorStore:
 
     def __init__(self, settings: Settings):
         if settings.chroma_api_key:
-            self.client = chromadb.CloudClient(
-                tenant=settings.chroma_tenant,
-                database=settings.chroma_database,
-                api_key=settings.chroma_api_key,
-            )
-            index_config = {"spann": {"space": "cosine"}}
-            logger.info("Using Chroma Cloud")
-        else:
-            os.makedirs(os.path.abspath(settings.chroma_path), exist_ok=True)
-            self.client = chromadb.PersistentClient(path=settings.chroma_path)
-            index_config = {"hnsw": {"space": "cosine"}}
-            logger.info("Using local ChromaDB at %s", settings.chroma_path)
+            try:
+                self.client = chromadb.CloudClient(
+                    tenant=settings.chroma_tenant,
+                    database=settings.chroma_database,
+                    api_key=settings.chroma_api_key,
+                )
+                index_config = {"spann": {"space": "cosine"}}
+                logger.info("Using Chroma Cloud")
+                self.collection = self._get_or_create_collection(index_config)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Chroma Cloud unavailable (%s); falling back to local PersistentClient at %s",
+                    exc,
+                    settings.chroma_path,
+                )
 
+        self.client, index_config = self._init_local_client(settings)
+        self.collection = self._get_or_create_collection(index_config)
+
+    @staticmethod
+    def _init_local_client(settings: Settings):
+        os.makedirs(os.path.abspath(settings.chroma_path), exist_ok=True)
+        client = chromadb.PersistentClient(path=settings.chroma_path)
+        index_config = {"hnsw": {"space": "cosine"}}
+        logger.info("Using local ChromaDB at %s", settings.chroma_path)
+        return client, index_config
+
+    def _get_or_create_collection(self, index_config: dict):
         try:
-            self.collection = self.client.get_or_create_collection(
-                name="rag_collection", configuration=index_config
-            )
+            return self.collection_or_create(index_config)
         except Exception:
-            self.collection = self.client.get_or_create_collection(name="rag_collection")
+            return self.client.get_or_create_collection(name="rag_collection")
+
+    def collection_or_create(self, index_config: dict):
+        return self.client.get_or_create_collection(
+            name="rag_collection", configuration=index_config
+        )
 
     def ping(self) -> bool:
         """Verify vector store connectivity and collection readiness."""

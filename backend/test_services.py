@@ -2,6 +2,8 @@
 
 import unittest
 
+from unittest.mock import patch
+
 from fastapi import HTTPException
 
 from app.config import Settings
@@ -13,6 +15,7 @@ from app.services.document_processor import (
     validate_upload_bytes,
 )
 from app.services.rag_service import extract_followups, strip_thinking_blocks
+from app.services.vector_store import ChromaVectorStore
 
 
 class ServicesUnitTestCase(unittest.TestCase):
@@ -98,6 +101,34 @@ class ServicesUnitTestCase(unittest.TestCase):
 
     def test_sanitize_filename_strips_traversal(self):
         self.assertEqual(sanitize_filename("../secret/../../notes?.md"), "notes_.md")
+
+    def test_chroma_cloud_failure_falls_back_to_local_store(self):
+        cfg = Settings(
+            gemini_api_key="test",
+            embedding_model="models/gemini-embedding-2",
+            embedding_dim=768,
+            generation_model="gemini-3.8-flash",
+            generation_temperature=0.2,
+            chunk_size=1800,
+            chunk_overlap=300,
+            top_k=12,
+            max_distance=0.78,
+            max_upload_mb=20,
+            max_query_chars=10000,
+            max_history_items=100,
+            max_retries=4,
+            chroma_api_key="bad-cloud-key",
+            chroma_tenant="tenant",
+            chroma_database="db",
+            chroma_path="./chroma_db",
+            allowed_origins=("*",),
+            rate_limit_enabled=True,
+            rate_limit_requests=60,
+            rate_limit_window_seconds=60,
+        )
+        with patch("app.services.vector_store.chromadb.CloudClient", side_effect=RuntimeError("Permission denied")):
+            store = ChromaVectorStore(cfg)
+        self.assertTrue(store.ping())
 
 
 if __name__ == "__main__":
