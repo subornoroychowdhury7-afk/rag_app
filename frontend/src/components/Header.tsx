@@ -1,5 +1,7 @@
 "use client";
 
+import type { AuthUser } from "@/lib/auth";
+
 interface HeaderProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -8,6 +10,8 @@ interface HeaderProps {
   currentView?: "landing" | "app";
   onToggleView?: () => void;
   docsCount?: number;
+  authUser?: AuthUser | null;
+  onLogout?: () => void;
 }
 
 export default function Header({
@@ -18,6 +22,8 @@ export default function Header({
   currentView = "app",
   onToggleView,
   docsCount = 0,
+  authUser = null,
+  onLogout,
 }: HeaderProps) {
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-4 backdrop-blur-lg dark:border-slate-700/50 dark:bg-slate-900/80">
@@ -112,6 +118,38 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-2">
+        {/* Authenticated user pill & Sign Out */}
+        {authUser && (
+          <div className="flex items-center gap-2">
+            <div
+              className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 sm:inline-flex"
+              title={`Signed in as ${authUser.email}`}
+            >
+              <span className="max-w-[140px] truncate font-semibold">{authUser.name}</span>
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                  authUser.role === "admin"
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                    : "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                }`}
+              >
+                {authUser.role}
+              </span>
+            </div>
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-950"
+                title="Sign out of DocQ&A"
+              >
+                Sign Out
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Toggle between Guide/Verification and App view */}
         {onToggleView && (
           <button

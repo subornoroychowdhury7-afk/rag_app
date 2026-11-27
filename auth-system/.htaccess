@@ -1,0 +1,14 @@
+# Disable directory listings
+Options -Indexes
+
+# Block direct HTTP access to sensitive files and dotfiles (.env, .htaccess, .sql, .log)
+<FilesMatch "(^\.|\.(env|example|sql|ps1|log|ini|md)$)">
+    Require all denied
+</FilesMatch>
+
+# Prevent PHP execution inside assets directory if uploads are ever added
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

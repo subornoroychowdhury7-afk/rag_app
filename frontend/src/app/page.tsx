@@ -1,14 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import AuthGate from "@/components/AuthGate";
 import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import LandingView from "@/components/LandingView";
 import Sidebar, { type Doc } from "@/components/Sidebar";
 import SummaryModal from "@/components/SummaryModal";
 import { getDocuments, uploadFile } from "@/lib/api";
+import {
+  clearStoredAuth,
+  getAuthLogoutUrl,
+  getStoredAuth,
+  isAuthEnabled,
+  saveStoredAuth,
+  verifySsoToken,
+  type AuthSession,
+} from "@/lib/auth";
 
 export default function Home() {
+  const authEnabled = isAuthEnabled();
+
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [authChecked, setAuthChecked] = useState(!authEnabled);
+  const [authVerifying, setAuthVerifying] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const [docs, setDocs] = useState<Doc[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
@@ -16,8 +33,65 @@ export default function Home() {
   const [summaryDocFilename, setSummaryDocFilename] = useState<string | null>(null);
   const [view, setView] = useState<"landing" | "app">("landing");
 
-  /* ---- Load documents on mount ---- */
+  /* ---- Resolve SSO token or stored session on mount ---- */
   useEffect(() => {
+    if (!authEnabled) return;
+
+    const controller = new AbortController();
+    const url = new URL(window.location.href);
+    const ssoToken = url.searchParams.get("sso");
+
+    if (ssoToken) {
+      queueMicrotask(() => {
+        setAuthVerifying(true);
+        setAuthError(null);
+      });
+
+      verifySsoToken(ssoToken, controller.signal)
+        .then((session) => {
+          saveStoredAuth(session);
+          setAuthSession(session);
+          setAuthVerifying(false);
+          setAuthChecked(true);
+          url.searchParams.delete("sso");
+          window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+        })
+        .catch((err) => {
+          if (err instanceof Error && err.name === "AbortError") return;
+          clearStoredAuth();
+          setAuthError(
+            err instanceof Error
+              ? err.message
+              : "Could not verify SSO login token."
+          );
+          setAuthVerifying(false);
+          setAuthChecked(true);
+          url.searchParams.delete("sso");
+          window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+        });
+
+      return () => {
+        controller.abort();
+      };
+    }
+
+    const existing = getStoredAuth();
+    queueMicrotask(() => {
+      if (existing) {
+        setAuthSession(existing);
+      }
+      setAuthChecked(true);
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [authEnabled]);
+
+  /* ---- Load documents once authorized ---- */
+  useEffect(() => {
+    if (authEnabled && !authSession) return;
+
     const controller = new AbortController();
     getDocuments(controller.signal)
       .then((list) => {
@@ -32,7 +106,7 @@ export default function Home() {
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [authEnabled, authSession]);
 
   /* ---- Dark mode: localStorage + system preference on mount ---- */
   useEffect(() => {
@@ -53,6 +127,13 @@ export default function Home() {
       localStorage.setItem("theme", next ? "dark" : "light");
       return next;
     });
+  }
+
+  function handleLogout() {
+    const logoutUrl = getAuthLogoutUrl(authSession?.logoutToken);
+    clearStoredAuth();
+    setAuthSession(null);
+    window.location.href = logoutUrl;
   }
 
   function handleUploaded(d: Doc) {
@@ -83,6 +164,8 @@ export default function Home() {
     setView("app");
   }
 
+  const isLocked = authEnabled && !authSession;
+
   return (
     <div className="flex h-dvh flex-col">
       <Header
@@ -90,12 +173,23 @@ export default function Home() {
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         darkMode={darkMode}
         onToggleDark={toggleDark}
-        currentView={view}
-        onToggleView={() => setView((v) => (v === "landing" ? "app" : "landing"))}
+        currentView={isLocked ? "landing" : view}
+        onToggleView={
+          isLocked
+            ? undefined
+            : () => setView((v) => (v === "landing" ? "app" : "landing"))
+        }
         docsCount={docs.length}
+        authUser={authSession?.user ?? null}
+        onLogout={authEnabled && authSession ? handleLogout : undefined}
       />
 
-      {view === "landing" ? (
+      {isLocked ? (
+        <AuthGate
+          verifying={!authChecked || authVerifying}
+          error={authError}
+        />
+      ) : view === "landing" ? (
         <div className="flex-1 overflow-y-auto">
           <LandingView
             onGetStarted={handleGetStarted}
@@ -131,13 +225,15 @@ export default function Home() {
       )}
 
       {/* AI Executive Summary Briefing Modal */}
-      <SummaryModal
-        filename={summaryDocFilename}
-        onClose={() => setSummaryDocFilename(null)}
-        onAskAboutDoc={(docName) => {
-          setSelectedDocFilter(docName);
-        }}
-      />
+      {!isLocked && (
+        <SummaryModal
+          filename={summaryDocFilename}
+          onClose={() => setSummaryDocFilename(null)}
+          onAskAboutDoc={(docName) => {
+            setSelectedDocFilter(docName);
+          }}
+        />
+      )}
     </div>
   );
 }
