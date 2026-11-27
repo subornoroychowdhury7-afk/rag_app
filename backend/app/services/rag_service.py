@@ -380,11 +380,12 @@ class RAGService:
     ) -> dict:
         """Generate an executive-grade AI briefing for an indexed document."""
         clean_name = sanitize_filename(filename)
-        self.llm.require_api_key()
 
         ordered_chunks = self.vector_store.get_ordered_chunks(clean_name)
         if not ordered_chunks:
             raise HTTPException(404, f"No content found for document '{clean_name}'.")
+
+        self.llm.require_api_key()
 
         combined_text = "\n\n".join(ordered_chunks)
         truncated = len(combined_text) > SUMMARY_MAX_CHARS
