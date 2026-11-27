@@ -96,23 +96,41 @@ export default function Home() {
     };
   }, [externalAuth]);
 
-  /* ---- Load documents once authorized ---- */
-  useEffect(() => {
-    if (!authSession) return;
-
-    const controller = new AbortController();
-    getDocuments(controller.signal)
+  /* ---- Load documents once authorized & refresh on tab focus ---- */
+  function refreshDocuments(signal?: AbortSignal) {
+    return getDocuments(signal)
       .then((list) => {
         if (Array.isArray(list)) {
           setDocs(list);
+          setSelectedDocFilter((curr) =>
+            curr && !list.some((d) => d.name === curr) ? null : curr
+          );
         }
       })
       .catch((err) => {
         if (err instanceof Error && err.name === "AbortError") return;
         console.error("Failed to fetch documents:", err);
       });
+  }
+
+  useEffect(() => {
+    if (!authSession) return;
+
+    const controller = new AbortController();
+    refreshDocuments(controller.signal);
+
+    const onFocus = () => {
+      if (document.visibilityState === "visible") {
+        refreshDocuments();
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+
     return () => {
       controller.abort();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
   }, [authSession]);
 
@@ -270,6 +288,9 @@ export default function Home() {
             hasDocs={docs.length > 0}
             selectedDocFilter={selectedDocFilter}
             onSelectDocFilter={setSelectedDocFilter}
+            onRefreshDocs={() => {
+              void refreshDocuments();
+            }}
           />
         </div>
       )}

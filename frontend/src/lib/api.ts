@@ -28,6 +28,7 @@ export interface ChatResult {
   citations?: Citation[];
   suggested_followups?: string[];
   model_used?: string;
+  index_empty?: boolean;
 }
 
 export interface DocumentSummaryResult {

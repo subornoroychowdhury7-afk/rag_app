@@ -194,6 +194,48 @@ class ApiEndpointsTestCase(unittest.TestCase):
             self.assertEqual(res.status_code, 200)
             self.assertEqual(res.json()["answer"], NO_ANSWER)
 
+    def test_chat_overview_query_uses_ordered_chunks(self):
+        with (
+            patch.object(llm_client, "require_api_key", return_value=None),
+            patch.object(vector_store, "count", return_value=2),
+            patch.object(
+                vector_store,
+                "get_ordered_chunks",
+                return_value=[
+                    "Masterclass Teaching Notability covers audio-synced note taking.",
+                    "Split view lets teachers annotate PDFs beside lecture slides.",
+                ],
+            ),
+            patch.object(
+                llm_client,
+                "generate",
+                return_value=(
+                    "This PDF is a Masterclass guide on teaching with Notability [Masterclass.pdf].",
+                    "gemini-3.5-flash-lite",
+                ),
+            ),
+        ):
+            res = self.client.post(
+                "/chat",
+                json={"query": "what is inside the pdf?", "doc_filter": "Masterclass.pdf"},
+            )
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertIn("Masterclass", body["answer"])
+            self.assertEqual(body["source_files"], ["Masterclass.pdf"])
+            self.assertEqual(len(body["citations"]), 2)
+
+    def test_chat_empty_server_index_reports_index_empty(self):
+        with (
+            patch.object(llm_client, "require_api_key", return_value=None),
+            patch.object(vector_store, "count", return_value=0),
+        ):
+            res = self.client.post("/chat", json={"query": "what is in the document?"})
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertTrue(body.get("index_empty"))
+            self.assertIn("re-upload", body["answer"].lower())
+
     def test_rate_limiting_returns_429_with_retry_after(self):
         original_max = rate_limiter.max_requests
         rate_limiter.max_requests = 1

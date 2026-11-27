@@ -25,6 +25,15 @@ GREETING_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+OVERVIEW_QUERY_REGEX = re.compile(
+    r"\bwhat(?:'s|\s+is|\s+are)?\s+(?:in|inside|within|covered\s+in)\s+(?:the|this|my|uploaded)\s+(?:document|doc|pdf|file|text|page|upload|notes?)s?\b|"
+    r"\bwhat\s+(?:is|does)\s+(?:the|this|my)\s+(?:document|doc|pdf|file|upload)\s+(?:about|cover|contain|say|discuss|explain|talk\s+about)\b|"
+    r"\b(?:give|provide|show)\s+(?:me\s+)?(?:an?\s+)?(?:overview|summary|synopsis|breakdown|outline)\b|"
+    r"\b(?:summarize|summarise|overview\s+of|contents?\s+of|explain\s+(?:the|this)\s+(?:document|doc|pdf|file)|"
+    r"tell\s+me\s+about\s+(?:the|this)\s+(?:document|doc|pdf|file)|key\s+(?:points|takeaways|findings)|main\s+topics?)\b",
+    re.IGNORECASE,
+)
+
 MODE_INSTRUCTIONS = {
     "detailed": (
         "ANSWER STYLE: IN-DEPTH & THOROUGH (Default)\n"
@@ -194,7 +203,13 @@ class RAGService:
         if not history or not self.settings.api_key_configured:
             return query
 
-        recent = history[-8:]
+        recent = [
+            m for m in history[-8:]
+            if m.content.strip() != NO_ANSWER
+            and not m.content.strip().startswith("No documents are currently indexed")
+        ]
+        if not recent:
+            return query
         ambiguous_indicators = {
             "it", "this", "that", "these", "those", "they", "them", "their", "its",
             "he", "she", "his", "her", "why", "how", "what about", "and", "explain more",
@@ -250,50 +265,72 @@ class RAGService:
             if GREETING_REGEX.search(query):
                 return _empty_chat_payload(
                     "Hello! I am your **DocQ&A Assistant**. You currently do not have any documents indexed. "
-                    "Please upload a PDF, Markdown, or text file using the sidebar to begin asking questions!"
+                    "Please upload a PDF, Markdown, or text file using the sidebar to begin asking questions!",
+                    index_empty=True,
                 )
-            return _empty_chat_payload(NO_ANSWER)
+            if source_filter and self.vector_store.count(None) > 0:
+                return _empty_chat_payload(
+                    f"No indexed chunks were found for **{source_filter}** on the server. "
+                    "Please re-upload the document or click **Search All Docs**.",
+                    index_empty=True,
+                )
+            return _empty_chat_payload(
+                "No documents are currently indexed on the server (the server may have restarted or redeployed). "
+                "Please re-upload your document in the sidebar to continue.",
+                index_empty=True,
+            )
 
         embed = embed_fn or self.llm.embed_text
         generate = generate_fn or self.llm.generate
         search_query = self.contextualize_query(query, request.history, generate_fn=generate)
 
-        try:
-            query_vector = embed(search_query, "retrieval_query")
-        except Exception as exc:
-            logger.exception("Query embedding failed")
-            raise to_http_error(exc, "Embedding") from exc
+        citations: list[dict] = []
+        if OVERVIEW_QUERY_REGEX.search(query) or OVERVIEW_QUERY_REGEX.search(search_query):
+            citations = self._get_overview_citations(source_filter)
 
-        candidate_k = min(self.settings.top_k * 2, total)
-        results = self.vector_store.query(query_vector, candidate_k, source_filter)
-        distances: list[float] = results["distances"][0] if results.get("distances") else []
-        docs: list[str] = results["documents"][0] if results.get("documents") else []
-        metadatas: list[dict] = results["metadatas"][0] if results.get("metadatas") else []
+        if not citations:
+            try:
+                query_vector = embed(search_query, "retrieval_query")
+            except Exception as exc:
+                logger.exception("Query embedding failed")
+                raise to_http_error(exc, "Embedding") from exc
 
-        scored_candidates = []
-        for doc, meta, dist in zip(docs, metadatas, distances):
-            source_name = (meta or {}).get("source", "Document")
-            chunk_idx = (meta or {}).get("chunk_index", 0)
-            vec_sim = max(0.0, 1.0 - dist)
-            kw_sim = compute_keyword_score(search_query, doc)
+            candidate_k = min(self.settings.top_k * 2, total)
+            results = self.vector_store.query(query_vector, candidate_k, source_filter)
+            distances: list[float] = results["distances"][0] if results.get("distances") else []
+            docs: list[str] = results["documents"][0] if results.get("documents") else []
+            metadatas: list[dict] = results["metadatas"][0] if results.get("metadatas") else []
 
-            composite_score = (0.65 * vec_sim + 0.35 * kw_sim) if kw_sim > 0 else (0.85 * vec_sim)
-            effective_cutoff = self.settings.max_distance + (0.08 if kw_sim > 0.3 else 0.0)
-            if dist <= effective_cutoff:
-                relevance = max(15, min(99, round(composite_score * 100)))
-                scored_candidates.append(
-                    {
-                        "text": doc,
-                        "source": source_name,
-                        "chunk_index": chunk_idx,
-                        "relevance": relevance,
-                        "composite_score": composite_score,
-                        "dist": dist,
-                    }
-                )
+            scored_candidates = []
+            fallback_scoped = []
+            scoped_cutoff = min(0.92, self.settings.max_distance + 0.14)
+            for doc, meta, dist in zip(docs, metadatas, distances):
+                source_name = (meta or {}).get("source", "Document")
+                chunk_idx = (meta or {}).get("chunk_index", 0)
+                vec_sim = max(0.0, 1.0 - dist)
+                kw_sim = compute_keyword_score(search_query, doc)
 
-        scored_candidates.sort(key=lambda x: x["composite_score"], reverse=True)
-        citations = scored_candidates[: self.settings.top_k]
+                composite_score = (0.65 * vec_sim + 0.35 * kw_sim) if kw_sim > 0 else (0.85 * vec_sim)
+                effective_cutoff = self.settings.max_distance + (0.08 if kw_sim > 0.3 else 0.0)
+                candidate = {
+                    "text": doc,
+                    "source": source_name,
+                    "chunk_index": chunk_idx,
+                    "relevance": max(15, min(99, round(composite_score * 100))),
+                    "composite_score": composite_score,
+                    "dist": dist,
+                }
+                if dist <= effective_cutoff:
+                    scored_candidates.append(candidate)
+                elif source_filter and dist <= scoped_cutoff:
+                    fallback_scoped.append(candidate)
+
+            if not scored_candidates and fallback_scoped:
+                scored_candidates = fallback_scoped
+
+            scored_candidates.sort(key=lambda x: x["composite_score"], reverse=True)
+            citations = scored_candidates[: self.settings.top_k]
+
         retrieved_chunks = [c["text"] for c in citations]
         source_files = sorted(list({c["source"] for c in citations}))
 
@@ -340,6 +377,29 @@ class RAGService:
             "suggested_followups": suggested_followups,
             "model_used": model_used,
         }
+
+    def _get_overview_citations(self, source_filter: str | None) -> list[dict]:
+        """Collect representative sequential chunks for broad document-overview queries."""
+        doc_names = [source_filter] if source_filter else [d["name"] for d in self.vector_store.list_documents()]
+        if not doc_names:
+            return []
+
+        per_doc_limit = max(2, self.settings.top_k // len(doc_names))
+        citations: list[dict] = []
+        for doc_name in doc_names:
+            ordered = self.vector_store.get_ordered_chunks(doc_name)
+            for idx, chunk in enumerate(ordered[:per_doc_limit]):
+                citations.append(
+                    {
+                        "text": chunk,
+                        "source": doc_name,
+                        "chunk_index": idx,
+                        "relevance": 90,
+                        "composite_score": 0.9,
+                        "dist": 0.1,
+                    }
+                )
+        return citations[: self.settings.top_k]
 
     def _fallback_when_no_chunks(self, query: str) -> dict:
         if GREETING_REGEX.search(query):

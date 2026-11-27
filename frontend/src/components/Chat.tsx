@@ -20,6 +20,7 @@ interface ChatProps {
   docs?: { name: string; chunks: number }[];
   selectedDocFilter?: string | null;
   onSelectDocFilter?: (docName: string | null) => void;
+  onRefreshDocs?: () => void;
 }
 
 /* ---------- Sub-components ---------------------------------------- */
@@ -248,6 +249,7 @@ export default function Chat({
   hasDocs,
   selectedDocFilter,
   onSelectDocFilter,
+  onRefreshDocs,
 }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -500,6 +502,9 @@ export default function Chat({
         .map((m) => ({ role: m.role, content: m.content.slice(0, 32000) }));
 
       const res = await sendChat(query, history, selectedDocFilter, answerMode, controller.signal);
+      if (res.index_empty && onRefreshDocs) {
+        onRefreshDocs();
+      }
       setMessages((m) => [
         ...m,
         {
