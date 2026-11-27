@@ -16,7 +16,8 @@ SUPPORTED_EXTENSIONS = (".pdf", ".txt", ".md", ".markdown")
 
 def sanitize_filename(filename: str) -> str:
     """Strip path traversal components and normalise filename."""
-    base = os.path.basename(filename)
+    # Normalize Windows separators before basename so Linux servers strip C:\path\to\file too.
+    base = os.path.basename(filename.replace("\\", "/"))
     return re.sub(r"[^\w\.\-\s]", "_", base).strip()
 
 
