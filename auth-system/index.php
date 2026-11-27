@@ -25,9 +25,11 @@ if (!empty($_SESSION['user_id']) && !empty($_SESSION['user_role'])) {
     exit;
 }
 
-$flash     = consume_flash();
-$activeTab = $flash['tab'] ?? 'login';
-$csrf      = csrf_token();
+$flash      = consume_flash();
+$queryTab   = strtolower(trim((string) ($_GET['tab'] ?? '')));
+$defaultTab = $queryTab === 'register' ? 'register' : 'login';
+$activeTab  = $flash['tab'] ?? $defaultTab;
+$csrf       = csrf_token();
 ?>
 <!DOCTYPE html>
 <html lang="en">

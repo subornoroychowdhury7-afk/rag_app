@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import AuthGate from "@/components/AuthGate";
+import AuthModal, { type AuthModalMode } from "@/components/AuthModal";
 import Chat from "@/components/Chat";
 import Header from "@/components/Header";
 import LandingView from "@/components/LandingView";
@@ -10,19 +10,24 @@ import SummaryModal from "@/components/SummaryModal";
 import { getDocuments, uploadFile } from "@/lib/api";
 import {
   clearStoredAuth,
+  consumePostAuthView,
+  getAuthLoginUrl,
   getAuthLogoutUrl,
   getStoredAuth,
-  isAuthEnabled,
+  isExternalAuthEnabled,
+  savePostAuthView,
   saveStoredAuth,
   verifySsoToken,
   type AuthSession,
 } from "@/lib/auth";
 
 export default function Home() {
-  const authEnabled = isAuthEnabled();
+  const externalAuth = isExternalAuthEnabled();
 
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [authChecked, setAuthChecked] = useState(!authEnabled);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<AuthModalMode>("login");
+  const [authRedirectTarget, setAuthRedirectTarget] = useState<"app" | "landing">("landing");
   const [authVerifying, setAuthVerifying] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -35,16 +40,15 @@ export default function Home() {
 
   /* ---- Resolve SSO token or stored session on mount ---- */
   useEffect(() => {
-    if (!authEnabled) return;
-
     const controller = new AbortController();
     const url = new URL(window.location.href);
     const ssoToken = url.searchParams.get("sso");
 
-    if (ssoToken) {
+    if (ssoToken && externalAuth) {
       queueMicrotask(() => {
         setAuthVerifying(true);
         setAuthError(null);
+        setAuthModalOpen(true);
       });
 
       verifySsoToken(ssoToken, controller.signal)
@@ -52,7 +56,11 @@ export default function Home() {
           saveStoredAuth(session);
           setAuthSession(session);
           setAuthVerifying(false);
-          setAuthChecked(true);
+          setAuthModalOpen(false);
+          const nextView = consumePostAuthView();
+          if (nextView === "app") {
+            setView("app");
+          }
           url.searchParams.delete("sso");
           window.history.replaceState({}, "", url.pathname + url.search + url.hash);
         })
@@ -65,7 +73,8 @@ export default function Home() {
               : "Could not verify SSO login token."
           );
           setAuthVerifying(false);
-          setAuthChecked(true);
+          setAuthModalMode("gate");
+          setAuthModalOpen(true);
           url.searchParams.delete("sso");
           window.history.replaceState({}, "", url.pathname + url.search + url.hash);
         });
@@ -80,17 +89,16 @@ export default function Home() {
       if (existing) {
         setAuthSession(existing);
       }
-      setAuthChecked(true);
     });
 
     return () => {
       controller.abort();
     };
-  }, [authEnabled]);
+  }, [externalAuth]);
 
   /* ---- Load documents once authorized ---- */
   useEffect(() => {
-    if (authEnabled && !authSession) return;
+    if (!authSession) return;
 
     const controller = new AbortController();
     getDocuments(controller.signal)
@@ -106,7 +114,7 @@ export default function Home() {
     return () => {
       controller.abort();
     };
-  }, [authEnabled, authSession]);
+  }, [authSession]);
 
   /* ---- Dark mode: localStorage + system preference on mount ---- */
   useEffect(() => {
@@ -129,11 +137,42 @@ export default function Home() {
     });
   }
 
+  function handleOpenAuth(tab: "login" | "register", targetView: "app" | "landing" = "landing") {
+    if (externalAuth) {
+      savePostAuthView(targetView);
+      window.location.href = getAuthLoginUrl(tab);
+      return;
+    }
+    setAuthError(null);
+    setAuthRedirectTarget(targetView);
+    setAuthModalMode(tab);
+    setAuthModalOpen(true);
+  }
+
+  function promptWorkspaceAuth() {
+    setAuthError(null);
+    setAuthRedirectTarget("app");
+    setAuthModalMode("gate");
+    setAuthModalOpen(true);
+  }
+
+  function handleLocalAuthenticated(session: AuthSession) {
+    saveStoredAuth(session);
+    setAuthSession(session);
+    setAuthModalOpen(false);
+    if (authRedirectTarget === "app") {
+      setView("app");
+    }
+  }
+
   function handleLogout() {
-    const logoutUrl = getAuthLogoutUrl(authSession?.logoutToken);
+    const token = authSession?.logoutToken;
     clearStoredAuth();
     setAuthSession(null);
-    window.location.href = logoutUrl;
+    setView("landing");
+    if (externalAuth) {
+      window.location.href = getAuthLogoutUrl(token);
+    }
   }
 
   function handleUploaded(d: Doc) {
@@ -153,18 +192,34 @@ export default function Home() {
 
   /* ---- Handle Direct Upload from Landing Page ---- */
   async function handleLandingUpload(file: File) {
+    if (!authSession) {
+      promptWorkspaceAuth();
+      return;
+    }
     const res = await uploadFile(file);
     const newDoc: Doc = { name: res.filename, chunks: res.chunks_processed };
     handleUploaded(newDoc);
     setView("app");
   }
 
-  /* ---- "Get Started" Action ---- */
-  function handleGetStarted() {
+  /* ---- Workspace entry guard ---- */
+  function handleEnterWorkspace() {
+    if (!authSession) {
+      promptWorkspaceAuth();
+      return;
+    }
     setView("app");
   }
 
-  const isLocked = authEnabled && !authSession;
+  function handleToggleView() {
+    if (view === "landing") {
+      handleEnterWorkspace();
+    } else {
+      setView("landing");
+    }
+  }
+
+  const effectiveView = authSession ? view : "landing";
 
   return (
     <div className="flex h-dvh flex-col">
@@ -173,28 +228,23 @@ export default function Home() {
         onToggleSidebar={() => setSidebarOpen((p) => !p)}
         darkMode={darkMode}
         onToggleDark={toggleDark}
-        currentView={isLocked ? "landing" : view}
-        onToggleView={
-          isLocked
-            ? undefined
-            : () => setView((v) => (v === "landing" ? "app" : "landing"))
-        }
+        currentView={effectiveView}
+        onToggleView={handleToggleView}
         docsCount={docs.length}
         authUser={authSession?.user ?? null}
-        onLogout={authEnabled && authSession ? handleLogout : undefined}
+        onOpenLogin={() => handleOpenAuth("login", "landing")}
+        onOpenRegister={() => handleOpenAuth("register", "landing")}
+        onLogout={authSession ? handleLogout : undefined}
       />
 
-      {isLocked ? (
-        <AuthGate
-          verifying={!authChecked || authVerifying}
-          error={authError}
-        />
-      ) : view === "landing" ? (
+      {effectiveView === "landing" ? (
         <div className="flex-1 overflow-y-auto">
           <LandingView
-            onGetStarted={handleGetStarted}
+            onGetStarted={handleEnterWorkspace}
             onUploadFile={handleLandingUpload}
             docsCount={docs.length}
+            isAuthenticated={Boolean(authSession)}
+            onRequireAuth={promptWorkspaceAuth}
           />
         </div>
       ) : (
@@ -224,8 +274,22 @@ export default function Home() {
         </div>
       )}
 
+      {/* Auth prompt / Sign-In / Register modal */}
+      <AuthModal
+        open={authModalOpen}
+        mode={authModalMode}
+        verifying={authVerifying}
+        error={authError}
+        redirectAfterAuth={authRedirectTarget}
+        onClose={() => {
+          if (!authVerifying) setAuthModalOpen(false);
+        }}
+        onSwitchMode={(nextMode) => setAuthModalMode(nextMode)}
+        onAuthenticated={handleLocalAuthenticated}
+      />
+
       {/* AI Executive Summary Briefing Modal */}
-      {!isLocked && (
+      {authSession && (
         <SummaryModal
           filename={summaryDocFilename}
           onClose={() => setSummaryDocFilename(null)}
